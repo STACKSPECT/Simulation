@@ -62,7 +62,11 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
                 verbose: bool = False) -> Episode:
     """Completa un episodio autónomo desde la fuente hasta el palé."""
     arm = ArmController(scene)
+    # `speed` decide dos cosas y las dos viven aquí: si el brazo teletransporta entre
+    # waypoints (0 = fast-forward) y, con visor, a qué ritmo se ve. Sin la segunda,
+    # cualquier `--speed` positivo corría igual. Ver `PalletScene.sync_viewer`.
     arm.fast_forward = speed <= 0.0
+    scene.speed = max(0.0, float(speed))
     episode = Episode(seed=seed, n_objects=len(scene.boxes))
     scene.episode_specs = {}
     scene.episode_plans = {}

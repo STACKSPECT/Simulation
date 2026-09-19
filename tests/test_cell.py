@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -112,6 +114,41 @@ def test_belt_present_settles_jittered_deliveries() -> None:
             scene.close()
 
 
+def test_the_belt_delivers_every_package_fully_supported() -> None:
+    """Entregar es dejar el cartón ENTERO sobre la banda, plano y quieto.
+
+    Los tres niveles fallaban con la estación en el canto de la banda: el bulto paraba
+    con medio cuerpo en el aire, volcaba y se iba hacia atrás —o al suelo— mientras el
+    brazo viajaba. Se mira la huella GIRADA, no el centro: un cartón de 0.55 m a 30°
+    ocupa 0.33 m de semihuella en X y es justo el que se salía.
+    """
+    for level in (21, 22, 23):
+        scene = build_scene(level_id=level, seed=1, simplified=True)
+        try:
+            belt = Belt(scene)
+            belt.stage(scene)
+            x, y = scene.cfg["conveyor"]["center"]
+            length, width = scene.cfg["conveyor"]["dims"]
+            for _ in range(len(scene.boxes)):
+                package_id = belt.present(scene)
+                assert package_id is not None, f"nivel {level}: la cinta no entregó"
+                index = belt.current
+                body = scene.body_id(index)
+                cx, cy, _ = scene.data.xpos[body]
+                rotation = scene.data.xmat[body].reshape(3, 3)
+                half_x, half_y, _ = (value / 2 for value in scene.boxes[index].dims_m)
+                # Semihuella del rectángulo girado, que es lo que apoya de verdad.
+                reach_x = abs(rotation[0, 0]) * half_x + abs(rotation[0, 1]) * half_y
+                reach_y = abs(rotation[1, 0]) * half_x + abs(rotation[1, 1]) * half_y
+                assert cx - reach_x >= x - length / 2 and cx + reach_x <= x + length / 2
+                assert cy - reach_y >= y - width / 2 and cy + reach_y <= y + width / 2
+                assert rotation[2, 2] > math.cos(math.radians(2.0))
+                belt.release(scene)
+                scene.park_box(index)
+        finally:
+            scene.close()
+
+
 def test_belt_times_out_if_the_package_never_settles() -> None:
     """Si llega y no se asienta, es `timeout`, no una entrega con pose caducada."""
     scene = build_scene(level_id=21, seed=1, simplified=True)
@@ -124,6 +161,41 @@ def test_belt_times_out_if_the_package_never_settles() -> None:
         assert supply.jammed
         assert supply.current is None
     finally:
+        scene.close()
+
+
+class _CountingViewer:
+    """Un visor de mentira: sólo cuenta cuántas veces le piden refrescar."""
+
+    def __init__(self) -> None:
+        self.syncs = 0
+
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self) -> None:
+        self.syncs += 1
+
+
+def test_the_viewer_sets_the_pace_and_does_not_sync_every_step() -> None:
+    """`speed` es el ritmo, y refrescar 500 veces por segundo no es más fluido.
+
+    Antes `--speed` sólo decidía si el brazo teletransporta: cualquier valor positivo
+    corría igual. Y se sincronizaba una vez por paso de 2 ms, ocho veces la pantalla.
+    """
+    scene = build_scene(level_id=21, seed=1, simplified=True)
+    try:
+        scene.viewer = _CountingViewer()
+        scene.speed = 2.0                     # 2 s simulados por segundo real
+        start = time.monotonic()
+        scene.step(0.5)                       # 250 pasos: 0.25 s de reloj de pared
+        elapsed = time.monotonic() - start
+        # Sin acompasar, estos 250 pasos se van en ~13 ms: el ritmo es lo que los frena.
+        assert 0.20 < elapsed < 1.0, elapsed
+        # Y a 60 Hz eso son ~15 refrescos, no 250.
+        assert 1 <= scene.viewer.syncs < 100, scene.viewer.syncs
+    finally:
+        scene.viewer = None
         scene.close()
 
 

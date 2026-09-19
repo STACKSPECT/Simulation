@@ -185,7 +185,16 @@ class Belt(_BaseSupply):
         return abs(z - (self.surface_z + box.dims_m[2] / 2)) < BELT_BAND
 
     def _drive(self, scene) -> None:
-        """Un tick de banda: arrastra hacia la estación lo que vaya montado en ella."""
+        """Un PASO de banda: arrastra hacia la estación lo que vaya montado en ella.
+
+        Va por paso de física, no por tick de control, y eso no es afinado: la superficie
+        de la banda es estática y lo único que mueve el cartón es que se le reponga la
+        velocidad. Entre reposición y reposición la fricción se la come, así que
+        reponiéndola cada 20 ms —un tick de control, diez pasos— la consigna de 0.25 m/s
+        se quedaba en 0.10 m/s reales: 11.9 s para los 1.23 m del trayecto, con el brazo
+        parado mirando todo ese rato. Reponiéndola cada 2 ms salen 0.231 m/s y 5.3 s.
+        Medido en el nivel 21.
+        """
         for index in self.pending:
             if not self._riding(scene, index):
                 continue
@@ -249,9 +258,10 @@ class Belt(_BaseSupply):
         self.running = True
         deadline = scene.clock + self.timeout_s
         body = scene.body_id(index)
+        step = scene.model.opt.timestep
         while scene.clock < deadline:
             self._drive(scene)
-            scene.step(1.0 / scene.cfg["episode"]["control_hz"])
+            scene.step(step)
             if abs(float(scene.data.xpos[body][0]) - self.station_x) < self.tol:
                 self._stop(scene)
                 if not self._wait_until_still(scene, index, deadline):

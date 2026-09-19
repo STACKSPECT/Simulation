@@ -47,6 +47,7 @@ cajas todavía cayendo.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -126,6 +127,9 @@ class Level:
 
 SOURCES = ("table", "conveyor", "truck")
 SOURCE_DECADE = {"table": 1, "conveyor": 2, "truck": 3}
+
+# Cada cuánto se refresca el visor, en segundos de reloj de pared. Ver `sync_viewer`.
+FRAME_SECONDS = 1.0 / 60.0
 
 
 def load_configs(root: Path | None = None) -> dict:
@@ -970,6 +974,11 @@ class PalletScene:
         # temporal por rápida que sea la máquina.
         self.clock = 0.0
         self.viewer = None
+        # Segundos simulados por segundo de reloj de pared, SÓLO con visor. 0 = a lo que
+        # dé la máquina, que es lo que quiere el headless. Lo pone `run_episode`.
+        self.speed = 0.0
+        self._wall_origin = 0.0
+        self._next_frame = 0.0
 
         self._compile(build_mjcf(cfg, level, boxes, None, simplified=simplified))
         self.home = np.asarray(cfg["robot"]["ik_seed_qpos"], dtype=float)
@@ -1147,14 +1156,49 @@ class PalletScene:
         simulate.load(self.model, self.data, "")
 
     def sync_viewer(self) -> None:
-        if self.viewer is not None and self.viewer.is_running():
-            # `m` es también el atajo de MuJoCo para "Center of Mass". Ver el porqué en
-            # `render.silence_com_markers`. El import va aquí y no arriba porque
-            # `render` importa de este módulo.
-            from src.cell.render import silence_com_markers
+        """Refresca el visor, y es también donde el episodio lleva el ritmo.
 
-            silence_com_markers(self.viewer, self.mujoco)
-            self.viewer.sync()
+        Los tres bucles de física —`step`, `move_joints` y `step_physics`— pasan por
+        aquí una vez por PASO de 2 ms, así que éste es el único sitio donde hace falta
+        poner las dos cosas, y por eso ningún otro cambia.
+
+        **Acompasar.** No había nada que atase el reloj simulado al de pared: `--speed`
+        sólo decidía si el brazo teletransporta (`speed <= 0`) y cualquier valor positivo
+        corría igual. Aquí `speed` pasa a ser lo que dice ser, segundos simulados por
+        segundo real, y `--speed 4` se ve cuatro veces más rápido.
+
+        **Y no sincronizar 500 veces por segundo.** Un episodio del nivel 21 son ~46.000
+        pasos: sincronizar en cada uno es ocho veces la tasa de pantalla, y lo que se ve
+        no es más fluido, es más lento. Se limita a 60 Hz de reloj de pared.
+
+        El reancle es por `solve_ik`: sus 600 `mj_forward` no pasan por aquí, así que
+        tras una convergencia lenta el reloj simulado se queda atrás y sin reanclar el
+        visor correría a saltos recuperando el retraso.
+        """
+        if self.viewer is None or not self.viewer.is_running():
+            return
+
+        now = time.monotonic()
+        if self.speed > 0:
+            if self._wall_origin == 0.0:
+                self._wall_origin = now
+            delay = self._wall_origin + self.clock / self.speed - now
+            if delay > 0:
+                time.sleep(delay)
+                now = time.monotonic()
+            elif delay < -0.5:
+                self._wall_origin = now - self.clock / self.speed
+        if now < self._next_frame:
+            return
+        self._next_frame = now + FRAME_SECONDS
+
+        # `m` es también el atajo de MuJoCo para "Center of Mass". Ver el porqué en
+        # `render.silence_com_markers`. El import va aquí y no arriba porque
+        # `render` importa de este módulo.
+        from src.cell.render import silence_com_markers
+
+        silence_com_markers(self.viewer, self.mujoco)
+        self.viewer.sync()
 
     def close(self) -> None:
         if self.viewer is not None:

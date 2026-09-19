@@ -293,6 +293,10 @@ Dos avisos:
   `no_detection`. Son cosas distintas y conviene no mezclarlas, porque el gráfico de
   fallos las separa. En la cinta, PARA significa reposo medido: `present()` no
   devuelve tras un settle fijo.
+- **La estación no puede estar en el canto de la banda.** El cartón para donde le dicen,
+  y si eso lo deja con medio cuerpo en el aire vuelca, retrocede o se cae — no falla la
+  ventosa, falla la geometría. Por delante de la estación tiene que quedar al menos la
+  semihuella GIRADA del bulto más largo del catálogo. Las cifras, en `configs/scene.yaml`.
 
 ### El centro de gravedad
 

@@ -102,12 +102,39 @@ table:
 # La banda se mueve de verdad: un `slide` con actuador de velocidad arrastra el paquete
 # y parar es poner la consigna a cero. NO se teletransporta nada — el punto de tener
 # cinta es que el paquete llegue con la pose que traiga, incluida la torcida.
+#
+# ── LA ESTACIÓN NO PUEDE ESTAR EN EL CANTO, Y ES DONDE ESTABA ───────────────────
+# Con `center: [-0.85, -0.66]` y `dims: [1.40, 0.50]` la banda acababa en x = -0.15 y la
+# estación estaba en x = -0.20: el cartón paraba con el centro a 50 mm del canto y el
+# resto EN EL AIRE. Medido sobre los tres niveles, el vuelo iba de 40 a 205 mm según el
+# bulto y su giro, y eso no se ve como un error de geometría sino como que la caja se
+# cae: en el nivel 22 el primer `std_m` llegaba VOLCADO 24.5°, y mientras el brazo
+# viajaba se hundía 36 mm y RETROCEDÍA 47 mm; en el 23 había cartones que se iban al
+# suelo (-500 y -613 mm en Z). De ahí el `ik_unreachable` del primer bulto.
+#
+# Cuánta banda hace falta por delante: el bulto más largo del generador mide 0.55 m y el
+# nivel 23 lo gira hasta 30°, así que su semihuella en X llega a
+# 0.55·cos30 + 0.36·sen30 = 0.328 m. Con la banda acabando en x = +0.15 quedan 0.35 m
+# por delante de la estación y los cartones de los tres niveles quedan ENTEROS sobre
+# ella: de 114 a 259 mm de banda por delante, vuelco 0.0° y deriva 0.0 mm.
+#
+# Y por qué además baja a y = -0.80: alargarla la mete debajo de la esquina cercana del
+# palé. Es el mismo choque que acaba de apartar la mesa —ver `table`— y se arregla
+# igual. En y = -0.66 la banda ocupaba y[-0.91, -0.41] y el palé empieza en y = -0.40:
+# con la herramienta (184 mm de hondo) bajando sobre esa esquina, el barrido de IK del
+# borde cercano pasaba de 32/180 poses irresolubles a 37/180 sólo por alargarla. En
+# y = -0.80 ocupa y[-1.05, -0.55], deja 150 mm de aire hasta la cubierta y el barrido
+# vuelve a 32/180. La estación queda donde la de la mesa, que es la pose de agarre ya
+# barrida con IK, a 0.80 m del pedestal.
+#
+# La ENTRADA no se mueve: `Belt.entry_x = center_x - length/2 + 0.12 = -1.43`, igual que
+# antes, así que el recorrido del paquete y lo medido sobre él siguen valiendo.
 conveyor:
-  center: [-0.85, -0.66]          # [x, y] de la banda, en el mundo
-  dims: [1.40, 0.50]              # [largo, ancho] COMPLETAS
+  center: [-0.70, -0.80]          # [x, y] de la banda, en el mundo
+  dims: [1.70, 0.50]              # [largo, ancho] COMPLETAS
   height: 0.58                    # misma cota que la mesa: la estación no cambia de sitio
   speed: 0.25                     # m/s con la cinta en marcha
-  station: [-0.20, -0.66]         # [x, y] de la estación de recogida
+  station: [-0.20, -0.80]         # [x, y] de la estación de recogida. Misma que la mesa
   station_tol: 0.020              # se da por llegado dentro de esta banda, y para
   spacing: 0.50                   # separación entre paquetes consecutivos
   timeout_s: 25.0                 # sin entrega en este tiempo -> `timeout`
