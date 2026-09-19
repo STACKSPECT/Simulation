@@ -250,20 +250,49 @@ motion:
   release_settle_s: 0.15         # con ventosa no hay que abrir nada: se corta el vacío
                                  # y se espera a que la caja apoye antes de subir
 
-# Iluminación de ESTA escena.
+# Iluminación de ESTA escena, con sus medias RGB medidas.
+#
+# La cenital ve caras horizontales y satura; el alzado ve verticales y sale a oscuras.
+# Medido sobre el recorte central de cada vista —el palé y su carga, sin el suelo que lo
+# rodea— con cuatro cajas colocadas y el brazo ya apartado:
+#
+#   hl_dif  hl_amb  hl_spec  overhead |  cenital        alzado
+#     0.75    0.45     0.20      0.55 |  162  53 % sat   69   6 % sat
+#     0.55    0.38     0.10      0.50 |  150  52 %        60   5 %
+#     0.45    0.32     0.06      0.45 |  139  44 %        54   1 %
+#     0.40    0.28     0.05      0.40 |  131  35 %        50   1 %
+#     0.35    0.24     0.04      0.38 |  124  22 %        47   0 %
+#     0.30    0.22     0.03      0.35 |  117   9 %        45   0 %   <- base
+#
+# Quien satura la cenital es el HEADLIGHT, que va pegado a la cámara: en la vista de
+# arriba apunta recto abajo y da de lleno en todas las caras horizontales. Bajarlo
+# arregla la cenital y deja el alzado a oscuras, que es el compromiso del que habla
+# AGENTS.md. Lo que lo rompe es el relleno diagonal, y su INCLINACIÓN importa más que su
+# potencia; con la base de arriba fija:
+#
+#   fill  dirección                  |  cenital        alzado
+#   0.50  (-0.60, 0.50, -0.62)       |  117   9 % sat   45   0 % sat
+#   0.80  (-0.60, 0.50, -0.62)       |  126  34 %        53   1 %    <- inclinado: satura
+#   0.80  (-0.55, 0.62, -0.28)       |  113   9 %        53   5 %
+#   1.10  (-0.55, 0.62, -0.28)       |  118  12 %        60   6 %    <- elegida
+#   1.40  (-0.55, 0.62, -0.28)       |  126  31 %        68   7 %
+#
+# Con el relleno inclinado, subirlo satura la cenital; tumbado, sube el alzado 15 puntos
+# y deja la cenital donde estaba. Esa es toda la gracia del relleno diagonal.
+#
+# El resto de saturación que queda son las marcas de suelo de seguridad, que son
+# amarillo 0.95/0.68/0.04 a propósito y no están en el palé.
 lighting:
-  headlight_diffuse: 0.75
-  headlight_ambient: 0.45
-  headlight_specular: 0.20
-  overhead_diffuse: [0.55, 0.55, 0.55]
+  headlight_diffuse: 0.30
+  headlight_ambient: 0.22
+  headlight_specular: 0.03
+  overhead_diffuse: [0.35, 0.35, 0.35]
   overhead_pos: [0.60, -0.40, 4.00]
   spot_diffuse: [0.35, 0.35, 0.35]
   spot_pos: [-0.20, -0.66, 2.20]
-  # El diagonal: la cenital ve caras horizontales y satura, el alzado ve verticales y
-  # sale a oscuras. Este relleno arregla el segundo sin romper el primero.
   fill:
-    direction: [-0.60, 0.50, -0.62]
-    diffuse: [0.30, 0.30, 0.32]
+    direction: [-0.55, 0.62, -0.28]
+    diffuse: [1.10, 1.10, 1.12]
 
 episode:
   level: 11                      # el que corre si no se pide otro
