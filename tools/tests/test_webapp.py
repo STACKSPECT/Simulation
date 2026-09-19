@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import signal
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -14,7 +16,7 @@ import pytest
 from stable_pallet import runner as runner_module
 from stable_pallet import webapp
 from stable_pallet.runner import interpreter, is_viewer_noise
-from stable_pallet.webapp import LISTENER_BACKLOG, Session, _catalogue, _Server
+from stable_pallet.webapp import LISTENER_BACKLOG, PalletizeClient, Session, _catalogue, _Server
 
 
 class FakeRunner:
@@ -272,6 +274,45 @@ def test_stopping_asks_the_runner_to_stop(served: Any, runner: type[FakeRunner])
     post(base, "/api/stop", {})
 
     assert runner.instances[-1].alive is False
+
+
+def test_stopping_an_execution_lets_the_cli_run_its_finally(tmp_path: Path) -> None:
+    """SIGTERM no recorre finally; parar desde el panel no puede dejar el episodio abierto."""
+    marker = tmp_path / "cleaned"
+    script = tmp_path / "child.py"
+    script.write_text(
+        "import sys, time\n"
+        "from pathlib import Path\n"
+        "try:\n"
+        "    print('ready', flush=True)\n"
+        "    time.sleep(30)\n"
+        "except KeyboardInterrupt:\n"
+        "    pass\n"
+        "finally:\n"
+        f"    Path({str(marker)!r}).write_text('ok')\n",
+        encoding="utf-8",
+    )
+    ready = threading.Event()
+
+    def on_message(message: dict[str, Any]) -> None:
+        if message.get("kind") == "log" and message.get("text") == "ready":
+            ready.set()
+
+    client = PalletizeClient(
+        {"source": "table", "level": 11, "speed": 1.0},
+        on_message,
+        argv=[sys.executable, str(script)],
+    )
+    try:
+        assert ready.wait(timeout=5)
+        client.stop(timeout=5)
+        assert not client.is_running()
+        assert client.process.returncode != -signal.SIGTERM
+        assert marker.read_text(encoding="utf-8") == "ok"
+    finally:
+        if client.is_running():
+            client.process.kill()
+            client.process.wait(timeout=2)
 
 
 def test_what_the_cell_is_busy_with_reaches_the_page(runner: type[FakeRunner]) -> None:
