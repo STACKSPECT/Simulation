@@ -1,0 +1,25 @@
+name: adversarial-centres-of-mass
+pallet:
+  width: 1.20
+  depth: 1.00
+  max_height: 1.60
+  max_mass: 500.0
+
+planner:
+  minimum_support_ratio: 0.55
+  minimum_tipping_margin: 0.012
+  beam_width: 10
+  lookahead: 3
+  candidates_per_node: 36
+
+simulation:
+  friction: 1.0
+  settle_seconds: 1.5
+
+packages:
+  - {id: heavy-a, size: [0.55, 0.42, 0.24], mass: 22.0, com: [0.12, 0.00, -0.04]}
+  - {id: heavy-b, size: [0.55, 0.42, 0.24], mass: 21.0, com: [-0.11, 0.03, -0.03]}
+  - {id: long-c, size: [0.68, 0.30, 0.20], mass: 12.0, com: [0.18, 0.00, 0.00]}
+  - {id: cube-d, size: [0.34, 0.34, 0.34], mass: 18.0, com: [0.07, -0.07, -0.08]}
+  - {id: flat-e, size: [0.62, 0.44, 0.16], mass: 9.0, com: [-0.16, 0.04, 0.01]}
+  - {id: small-f, size: [0.30, 0.28, 0.26], mass: 8.0, com: [0.06, 0.05, 0.00]}

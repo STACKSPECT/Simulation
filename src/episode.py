@@ -1,71 +1,344 @@
-"""
-El episodio: el director. Cose los tres módulos y mide lo que hace la física.
-
-PORTAR el esqueleto desde `~/HackSpain/paletizado-guionizado/src/pallet/episode.py` —la
-maniobra de `_pick`/`_place`/`_release`/`_settle`/`_shoot`, `Episode`, `Snapshot` y el
-contador de eventos están resueltos y medidos— y sustituir el guion por las llamadas a
-los módulos.
-
-**Este fichero pide, no calcula.** Si aquí aparece aritmética de huecos, de alturas o de
-confianza de detección, se ha colado lógica que le toca a otro. Lo único que decide es
-el orden y qué hacer cuando algo falla.
-
-El bucle por paquete, que es el orden que define la arquitectura:
-
-    conveyor.present()      la cinta avanza y PARA.  None -> timeout
-    detector.observe()      -> [Observation].  vacío -> no_detection
-    _pick()                                    no converge -> ik_unreachable
-                                               se escurre  -> grasp_slip
-    gauge.measure()         -> PackageSpec     (con el paquete YA en la mano)
-    heightmap.measure()     -> Heightmap       (MEDIDO, no un contador)
-    planner.choose()        -> PlacementPlan   None -> wrong_placement
-    _place()                                   y se mide la deriva al asentarse
-    conveyor.release()      con el brazo ya retirado
-    _record()               mide TODAS las cajas, no solo la nueva
-
-Lo que hay que conservar de la versión guionizada, palabra por palabra:
-
-**El paquete cuenta como INTENTADO desde que se toca**, y deja su fila pase lo que pase.
-Si el agarre o el depósito fallan, sale con `placed=false` y el estado del palé queda
-como estaba. Sin eso, el intento que tumba el episodio sería el único que no aparece en
-la tabla.
-
-**`_record` vuelve a medir todas las cajas.** Lo que avisa de un derrumbe es que la
-última descoloque a las de abajo, y eso no se ve mirando solo la que acaba de caer. Una
-caja que estaba bien puesta y ahora no lo está ES la definición operativa de derrumbe:
-sale de medir, no de un umbral inventado.
-
-**`seq` de los eventos es un contador del EPISODIO entero** (`len(episode.events)`), no
-del paquete: hay cinco o seis eventos por paquete y la base exige `unique(episode_id,
-seq)`. Un duplicado tumba la fila y, con ella, la subida del resto del episodio.
-
-**`ts` es tiempo SIMULADO**, no de reloj: así dos ejecuciones de la misma semilla dan la
-misma línea temporal por rápida que sea la máquina.
-
-**La foto de cada capa se toma con el brazo apartado en CARTESIANO.** En espacio de
-juntas el recorrido no está controlado y barre el montón recién colocado: medido, el
-episodio pasaba de 10/10 a 4/10 con `overhang_violation` en cuanto se metió la foto por
-capa. `park_joints=True` solo para la foto final, cuando ya no queda nada que colocar.
-
-Lo que CAMBIA:
-
-  - `run_episode` recibe el `Detector`, el `Gauge` y el `Planner` —los tres `Protocol`
-    de `contracts.py`—, no un guion. Quién es cada uno lo elige `scripts/palletize.py`.
-  - El payload de `perceive` deja de ser `{seen: las que faltan, confidence: 1.0}` y
-    pasa a ser lo que de verdad detectó y con qué confianza. El estado de la cinta cabe
-    ahí también: en el payload sobrar es inocuo.
-  - El payload de `plan` lleva el `layer` y el `slot` que decidió el planificador, y de
-    propina su `breakdown` del score.
-  - "No hay hueco" (`planner.choose()` devuelve `None`) es un `wrong_placement`
-    registrado, no una excepción.
-"""
+"""Director del episodio: pide, ejecuta, mide y registra, en ese orden."""
 
 from __future__ import annotations
 
-from src.contracts import Detector, Gauge, Planner, Sink
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from src import measure
+from src.cell.arm import ArmController
+from src.cell.conveyor import make_supply
+from src.cell.render import Snapshot, render
+from src.contracts import Detector, Gauge, PackageSpec, PlacementPlan, Planner, Sink
+from src.planner.naive import measured_heightmap
+
+
+@dataclass
+class Episode:
+    """Medidas, eventos e imágenes producidos por una ejecución."""
+
+    seed: int
+    n_objects: int
+    attempted: list = field(default_factory=list)
+    placements: list[measure.Placement] = field(default_factory=list)
+    final_placements: list[measure.Placement] = field(default_factory=list)
+    states: list[measure.PalletState] = field(default_factory=list)
+    drifts: list[float] = field(default_factory=list)
+    events: list[dict] = field(default_factory=list)
+    snapshots: list[Snapshot] = field(default_factory=list)
+    plans: list[PlacementPlan] = field(default_factory=list)
+    failure: str | None = None
+    duration_s: float = 0.0
+
+    @property
+    def n_placed(self) -> int:
+        rows = self.final_placements or self.placements
+        return sum(placement.placed for placement in rows)
+
+    @property
+    def success(self) -> bool:
+        return self.failure is None and self.n_placed == self.n_objects
 
 
 def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
-                seed: int = 0, speed: float = 1.0, sink: Sink | None = None):
-    """Monta el palé entero y devuelve lo medido."""
-    raise NotImplementedError("episodio sin implementar: portar y coser los módulos")
+                seed: int = 0, speed: float = 1.0, sink: Sink | None = None,
+                verbose: bool = False) -> Episode:
+    """Completa un episodio autónomo desde la fuente hasta el palé."""
+    arm = ArmController(scene)
+    arm.fast_forward = speed <= 0.0
+    episode = Episode(seed=seed, n_objects=len(scene.boxes))
+    scene.episode_specs = {}
+    scene.episode_plans = {}
+    supply = getattr(scene, "supply", None)
+    if supply is None:
+        supply = make_supply(scene)
+        scene.supply = supply
+        supply.stage(scene)
+    if hasattr(gauge, "calibrate"):
+        gauge.calibrate(scene, arm)
+    max_duration = float(scene.cfg["episode"]["max_duration_s"])
+
+    for _ in range(episode.n_objects):
+        if scene.clock > max_duration:
+            episode.failure = "timeout"
+            break
+
+        package_id = supply.present(scene)
+        if package_id is None:
+            episode.failure = None if supply.exhausted else "timeout"
+            break
+        observations = detector.observe(scene)
+        source_state = supply._state(scene) if hasattr(supply, "_state") else {
+            "source": scene.level.source
+        }
+        confidence = max((observation.confidence for observation in observations), default=0.0)
+        _event(episode, scene, sink, "perceive", None,
+               seen=len(observations), confidence=confidence, **source_state)
+        if not observations:
+            episode.failure = "no_detection"
+            break
+
+        observation = next(
+            (item for item in observations if item.package_id == package_id), observations[0]
+        )
+        box = next(box for box in scene.boxes if box.package_id == observation.package_id)
+        attempt = len(episode.attempted)
+        episode.attempted.append(box)
+
+        failure = _pick(arm, scene, box, observation)
+        if failure:
+            episode.failure = failure
+            if arm.is_holding():
+                _return_to_source(arm, scene, box, observation)
+            _prepare_failed_attempt(scene, box, observation, attempt)
+            _record(episode, scene, arm, attempt, 0.0, sink, planner, verbose)
+            break
+
+        spec = gauge.measure(scene, arm, observation)
+        scene.episode_specs[attempt] = spec
+        # `active_cups` y `grip_capacity_ratio` sobran para la interfaz de hoy, y eso es
+        # inocuo en un `payload`. Van porque un `grasp_slip` se ve venir en el ratio: la
+        # ventosa pierde margen antes de soltar la caja.
+        _event(
+            episode, scene, sink, "pick", box,
+            mass_kg=round(spec.mass_kg, 4),
+            type=spec.type_name,
+            cog_offset_mm=[round(float(value) * 1000, 1) for value in spec.cog_offset_m],
+            active_cups=len(arm.grasp.cups) if arm.grasp else 0,
+            grip_capacity_ratio=round(arm.grasp.capacity_ratio, 2) if arm.grasp else 0.0,
+        )
+
+        heightmap = measured_heightmap(scene)
+        centered = PackageSpec(
+            package_id=spec.package_id,
+            type_name=spec.type_name,
+            dims_m=spec.dims_m,
+            mass_kg=spec.mass_kg,
+            cog_offset_m=np.zeros(3),
+        )
+        planner.choose(centered, heightmap)
+        forecast = (
+            gauge.forecast(scene, supply.forecast(scene))
+            if hasattr(gauge, "forecast") else []
+        )
+        if hasattr(planner, "set_forecast"):
+            planner.set_forecast(forecast)
+        plan = planner.choose(spec, heightmap)
+        if plan is None:
+            episode.failure = "wrong_placement"
+            _return_to_source(arm, scene, box, observation)
+            _prepare_failed_attempt(scene, box, observation, attempt, spec)
+            _record(episode, scene, arm, attempt, 0.0, sink, planner, verbose)
+            break
+
+        scene.episode_plans[attempt] = plan
+        episode.plans.append(plan)
+        _event(
+            episode, scene, sink, "plan", box,
+            layer=plan.layer,
+            slot=plan.slot,
+            score=round(plan.score, 4),
+            breakdown=plan.breakdown,
+            heightmap_top_mm=round(heightmap.top * 1000, 1),
+        )
+
+        if len(episode.plans) > 1 and plan.layer > episode.plans[-2].layer:
+            _shoot(episode, scene, arm, attempt - 1, sink)
+
+        failure, drift = _place(arm, scene, box, spec, plan, episode.attempted)
+        if failure and arm.is_holding():
+            _return_to_source(arm, scene, box, observation)
+        supply.release(scene)
+        if failure:
+            episode.failure = failure
+        _record(episode, scene, arm, attempt, drift, sink, planner, verbose)
+        if episode.failure:
+            break
+
+    _finish(episode, scene, arm, sink)
+    episode.duration_s = round(float(scene.clock), 2)
+    if episode.failure:
+        _event(episode, scene, sink, "fail", None, cause=episode.failure)
+    return episode
+
+
+def _prepare_failed_attempt(scene, box, observation, attempt: int,
+                            spec: PackageSpec | None = None) -> None:
+    """Da una fila medible a un intento que falló antes de recibir un plan."""
+    if spec is None:
+        spec = PackageSpec(
+            box.package_id, box.type_name, tuple(observation.dims_guess), box.mass_kg,
+            np.zeros(3),
+        )
+    px, py = scene.pallet_center
+    scene.episode_specs[attempt] = spec
+    scene.episode_plans[attempt] = PlacementPlan(
+        position=np.array([px, py, scene.deck_z + spec.dims_m[2] / 2]),
+        yaw=0.0,
+        layer=1,
+        slot="unplanned",
+        score=0.0,
+        predicted_support=0.0,
+        breakdown={},
+    )
+
+
+def _pick(arm: ArmController, scene, box, observation) -> str | None:
+    """Recoge el paquete presentado y lo eleva hasta la cota de tránsito."""
+    motion = scene.cfg["motion"]
+    top = np.asarray(observation.position, dtype=float).copy()
+    top[2] += observation.dims_guess[2] / 2
+    seal_z = float(top[2]) + arm.cup_gap
+    safe_z = max(float(motion["transit_height"]), seal_z + float(motion["place_clearance"]))
+    if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
+        return "ik_unreachable"
+    if not arm.go_to(top[0], top[1], seal_z, observation.yaw, approach=True):
+        return "ik_unreachable"
+    grasp = arm.plan_grasp(box)
+    if not arm.seal(box.index, grasp):
+        return "grasp_slip"
+    if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
+        return "ik_unreachable"
+    return None if arm.is_holding() else "grasp_slip"
+
+
+def _return_to_source(arm: ArmController, scene, box, observation) -> None:
+    """Devuelve un paquete agarrado cuando el planificador no encuentra hueco."""
+    if not arm.is_holding():
+        return
+    top = np.asarray(observation.position, dtype=float).copy()
+    top[2] += observation.dims_guess[2] / 2
+    safe_z = max(float(scene.cfg["motion"]["transit_height"]), float(top[2]) + 0.18)
+    arm.go_to(top[0], top[1], safe_z, observation.yaw)
+    arm.go_to(top[0], top[1], float(top[2]) + arm.cup_gap, observation.yaw, approach=True)
+    arm.release()
+    arm.go_to(top[0], top[1], safe_z, observation.yaw)
+
+
+def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPlan,
+           watched: list) -> tuple[str | None, float]:
+    """Deposita, asienta, mide deriva y retira el brazo en cartesiano."""
+    motion = scene.cfg["motion"]
+    target_z = (
+        float(plan.position[2]) + spec.dims_m[2] / 2 + arm.cup_gap
+        + float(motion["drop_clearance"])
+    )
+    safe_z = max(
+        float(motion["transit_height"]),
+        target_z + float(motion["place_clearance"]),
+        scene.deck_z + measured_heightmap(scene).top + float(motion["stack_clearance"]),
+    )
+    current = arm.tcp_pose().position
+    if not arm.go_to(current[0], current[1], safe_z, plan.yaw):
+        return "ik_unreachable", 0.0
+    if not arm.go_to(plan.position[0], plan.position[1], safe_z, plan.yaw):
+        return "ik_unreachable", 0.0
+    if not arm.go_to(plan.position[0], plan.position[1], target_z, plan.yaw, approach=True):
+        return "ik_unreachable", 0.0
+    before = measure.positions(scene, watched)
+    arm.release()
+    scene.settle()
+    drift = measure.max_displacement(before, measure.positions(scene, watched))
+    if not arm.go_to(plan.position[0], plan.position[1], safe_z, plan.yaw):
+        return "ik_unreachable", drift
+    if arm.is_holding():
+        return "grasp_slip", drift
+    return None, drift
+
+
+def _record(episode: Episode, scene, arm: ArmController, index: int, drift: float,
+            sink: Sink | None, planner: Planner, verbose: bool) -> None:
+    """Remide todas las cajas intentadas y emite una fila aunque haya fallo."""
+    done: list[measure.Placement] = []
+    for attempt, box in enumerate(episode.attempted):
+        done.append(measure.measure_placement(scene, box, attempt, done))
+    collapse = any(
+        old.placed and not new.placed
+        for old, new in zip(episode.placements, done)
+    )
+    episode.placements = done
+    state = measure.pallet_state(measure.on_pallet(scene, done))
+    episode.states.append(state)
+    episode.drifts.append(drift)
+    last = done[-1]
+    # `reach_residual_mm` es lo que el brazo NO llegó a corregir al soltar. El error de
+    # colocación dice dónde acabó la caja; esto dice si la maniobra iba justa de alcance,
+    # que es una causa de lo anterior y no se deduce de ella.
+    _event(
+        episode, scene, sink, "place", last.box,
+        error_xy_mm=round(last.error_xy * 1000, 1),
+        error_yaw_deg=round(float(np.degrees(last.error_yaw)), 1),
+        overhang_mm=round(last.overhang * 1000, 1),
+        reach_residual_mm=round(arm.last_residual * 1000, 1),
+    )
+    _event(
+        episode, scene, sink, "settle", last.box,
+        layer=last.layer, drift_mm=round(drift * 1000, 1),
+    )
+    if sink is not None:
+        sink.placement(index, last)
+        sink.pallet_state(index, state, drift)
+    if hasattr(planner, "record") and measure.rect_overlap(last.rect, measure.pallet_rect(scene)):
+        planner.record(last)
+    if verbose:
+        print(
+            f"  {last.spec.package_id} {last.spec.type_name:<10} L{last.layer} "
+            f"error {last.error_xy * 1000:5.1f} mm  apoyo {last.support_ratio:4.0%} "
+            f"margen {state.stability_margin * 1000:+6.1f} mm  "
+            f"{'ok' if last.placed else 'FALLO'}"
+        )
+    if collapse:
+        episode.failure = "stack_collapse"
+    elif episode.failure is None and not last.placed:
+        episode.failure = (
+            "overhang_violation"
+            if last.overhang > float(scene.cfg["episode"]["max_overhang"])
+            else "wrong_placement"
+        )
+
+
+def _shoot(episode: Episode, scene, arm: ArmController, after_seq: int,
+           sink: Sink | None, *, final: bool = False) -> None:
+    """Aparta el brazo en cartesiano, asienta y toma las vistas configuradas."""
+    if final:
+        arm.go_home()
+    else:
+        arm.park()
+    scene.settle(0.25)
+    for view in scene.cfg["episode"]["snapshot_views"]:
+        shot = Snapshot(view=view, after_seq=after_seq, image=render(scene, view))
+        episode.snapshots.append(shot)
+        if sink is not None:
+            sink.snapshot(shot)
+
+
+def _finish(episode: Episode, scene, arm: ArmController, sink: Sink | None) -> None:
+    """Retira el brazo, remide el resultado final y toma la última foto."""
+    if not episode.attempted:
+        episode.final_placements = []
+        return
+    final_seq = len(episode.attempted) - 1
+    if not any(shot.after_seq == final_seq for shot in episode.snapshots):
+        _shoot(episode, scene, arm, final_seq, sink, final=True)
+    measured: list[measure.Placement] = []
+    for index, box in enumerate(episode.attempted):
+        measured.append(measure.measure_placement(scene, box, index, measured))
+    if any(old.placed and not new.placed
+           for old, new in zip(episode.placements, measured)):
+        episode.failure = episode.failure or "stack_collapse"
+    episode.final_placements = measured
+
+
+def _event(episode: Episode, scene, sink: Sink | None, kind: str,
+           box=None, **payload) -> None:
+    row = {
+        "ts": round(float(scene.clock), 2),
+        "seq": len(episode.events),
+        "kind": kind,
+        "package_id": None if box is None else box.package_id,
+        "payload": payload,
+    }
+    episode.events.append(row)
+    if sink is not None:
+        sink.event(row)
