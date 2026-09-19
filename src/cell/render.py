@@ -43,9 +43,7 @@ class Snapshot:
 
     view: str
     after_seq: int
-    png: bytes
-    width: int
-    height: int
+    image: np.ndarray
 
 
 def render(scene, view: str) -> np.ndarray:
