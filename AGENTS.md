@@ -1,0 +1,347 @@
+# AGENTS.md
+
+Contexto permanente de este repositorio. Léelo entero antes de escribir código. Si algo
+aquí contradice lo que crees saber, gana este documento; si algo está desactualizado,
+corrígelo en el mismo PR.
+
+---
+
+## 1. Qué es esto
+
+Una simulación de paletizado **de verdad**: un brazo coge paquetes de una cinta que se
+para, los mide, decide dónde van y los apila en un palé. La física es MuJoCo, las
+métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
+
+El predecesor —`STACKSPECT/Guionized-simulation`— hacía lo mismo con el hueco de cada
+caja escrito en un YAML. Existía para fijar el contrato con la plataforma y recorrerlo
+entero antes de que existiera el sistema real. **Este repo es el sistema real.** La
+diferencia no es cosmética:
+
+| | guionizado | aquí |
+|---|---|---|
+| dónde va cada caja | escrito en `configs/pallet.yaml` | lo decide la heurística con lo que ve y lo que mide |
+| qué hay en la cinta | nada, las cajas esperan colocadas en la mesa | lo dice la percepción, y puede equivocarse |
+| dimensiones del paquete | del catálogo | se miden con el paquete ya en la mano |
+| `oracle` del run | `true` | **`false`** en cuanto no queda ningún stub |
+| `no_detection` | inalcanzable | alcanzable |
+
+## 2. La arquitectura
+
+Tres capas, más dos transversales. Cada carpeta es una frontera: se toca la de uno sin
+abrir la de los demás.
+
+| Capa | Carpeta | Qué hace |
+|---|---|---|
+| **Visión** | `src/vision/` | Ve el paquete parado en la cinta (`detect.py`) y lo **mide** ya en la mano: dimensiones, masa, centro de gravedad (`gauge.py`) |
+| **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`) |
+| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, **cinta** que arranca y para, cámaras (`scene.py`, `arm.py`, `conveyor.py`, `render.py`) |
+| Medida | `src/measure.py` | El resultado: error, apoyo, vuelo, CoG del palé, margen de estabilidad |
+| Trazabilidad | `src/telemetry.py` | **Única** frontera con la plataforma |
+
+Los cose `src/episode.py`, que es el director: pide, no calcula. Y todos hablan el mismo
+idioma, `src/contracts.py`.
+
+El ciclo de un paquete, que es también el orden en que se llaman los módulos:
+
+```
+cinta avanza y PARA          cell.conveyor.present()
+  -> se ve                   vision.detect.observe()      -> Observation
+  -> se coge                 cell.arm                     (ejecución)
+  -> se mide en la mano      vision.gauge.measure()       -> PackageSpec
+  -> se decide el hueco      planner.heuristic.choose()   -> PlacementPlan
+  -> se coloca               cell.arm                     (ejecución)
+  -> se mide el resultado    measure.measure_placement()  -> Placement, PalletState
+  -> se cuenta               telemetry.RunLogSink         (filas en vivo)
+```
+
+Fíjate en el orden: **se mide DESPUÉS de coger y ANTES de planificar**. No es un capricho
+de diseño, es lo que obliga a que el planificador sea incremental — no puede precalcular
+el palé entero porque no sabe cómo es el siguiente paquete hasta que lo tiene agarrado.
+
+## 3. Los contratos
+
+`src/contracts.py` es el único fichero que leen los cuatro módulos, y el único que hay
+que consensuar antes de tocar nada. Quién produce qué:
+
+| Dato | Lo produce | Lo consume | Qué lleva |
+|---|---|---|---|
+| `Observation` | `vision/detect.py` | `episode.py` (para ir a coger) | id, pose en la cinta, dims aproximadas, `confidence` |
+| `PackageSpec` | `vision/gauge.py` | `planner`, `telemetry` | `dims_m`, `mass_kg`, `cog_offset_m`, `grasp_width`, `type_name` |
+| `Heightmap` | `planner/heightmap.py` | `planner/heuristic.py` | rejilla de alturas del palé, en metros sobre la cubierta |
+| `PlacementPlan` | `planner/heuristic.py` | `episode.py` (dónde soltar) | pose objetivo, `layer`, `slot`, `score`, apoyo previsto |
+| `Placement`, `PalletState` | `measure.py` | `telemetry.py` | lo medido: error, apoyo, vuelo, CoG, margen, relleno |
+
+Y cuatro `Protocol` —`Detector`, `Gauge`, `Planner`, `Sink`— que es lo que permite
+trabajar en paralelo sin bloquearse.
+
+**La regla que hace que esto funcione: cada módulo entrega su stub-oráculo ANTES que su
+implementación.** El stub lee la verdad de la escena (`cell.scene` sabe dónde está cada
+caja y cuánto pesa) y devuelve el contrato sin error. Con los cuatro stubs, el bucle
+entero corre verde el primer día, y sustituir uno por lo bueno es cambiar **una línea**
+en `scripts/palletize.py`. Sin eso, nadie puede probar lo suyo hasta que estén los
+cuatro, que es exactamente como se pierde una semana.
+
+Los stubs viven al lado de lo que sustituyen: `vision/oracle.py`, `planner/naive.py`.
+
+**`oracle` del run es `any(stub en uso)`.** Un run con el detector oráculo NO es un run
+con percepción, y la interfaz no compara los dos: marcarlo mal invalida justo la
+comparación que justifica el trabajo. Se calcula en `scripts/palletize.py`, donde se
+eligen las piezas, y no se escribe a mano en ningún otro sitio.
+
+## 4. Puesta en marcha
+
+```bash
+bash scripts/setup.sh          # venv + dependencias + SDK + modelo del brazo
+source .venv/bin/activate
+
+python scripts/palletize.py --viewer            # verlo
+python scripts/palletize.py -n 3                # 3 episodios; SUBE por defecto
+python scripts/palletize.py -n 3 --no-telemetry # sin subir, solo disco
+python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
+python -m src.measure                           # la medida, con sus asserts
+```
+
+El SDK `theker_telemetry` **no vive aquí**: es el contrato de lo que la plataforma
+guarda, y quien define la forma del dato es quien lo almacena. `setup.sh` lo instala
+editable desde el repo Platform y comprueba que trae `RunLog.begin` y
+`stability_margin`: **solo la rama `dev`** los tiene. Con `main` el fallo no aparece al
+instalar, sino al correr.
+
+Las credenciales de Supabase se leen del `.env` del repo o del de su carpeta padre.
+`SUPABASE_SERVICE_KEY` se salta el RLS y es la única que escribe: solo lado Python.
+
+## 5. Reglas duras
+
+Ninguna se deduce leyendo el SDK. Todas costaron una ejecución perdida en el repo
+anterior.
+
+**Se sube por defecto, y se dice.** Con `.env` presente la telemetría va activa sin pedir
+nada, y al arrancar se imprime en qué modo corre. El SDK trata "sin credenciales" como su
+modo normal, así que un `.env` mal puesto se traga la subida en silencio: se corría, se
+miraba la interfaz, no había nada y no había forma de saber por qué.
+
+**Un episodio abierto se cierra SIEMPRE.** Un Ctrl-C, cerrar el visor o un proceso muerto
+dejan la fila en `running` para siempre, y la pantalla Live elige el primer episodio en
+ese estado **sin ordenar**: un solo huérfano la deja clavada ahí indefinidamente. El
+bucle va en `try/finally` y en el `finally` se cierra con `success=False, failure=None`.
+
+**El disco manda.** El `episodes.jsonl` de `runs/` es la fuente de verdad y Supabase una
+réplica. Un fallo de red avisa una vez, apaga la subida y el episodio sigue. **No
+envuelvas las llamadas de telemetría en try/except**: el SDK ya lo hace, y hacerlo dos
+veces esconde el aviso.
+
+**Se escribe en vivo, no de golpe.** `begin()` abre el episodio en curso,
+`event()`/`placement()`/`pallet_state()`/`snapshot()` sueltan filas según se miden,
+`end()` lo cierra con un `PATCH`. Ése es todo el motivo por el que la pantalla Live está
+viva. **No mezcles `episode()` con `begin()`** en el mismo episodio: insertaría la fila
+dos veces y el `unique(run_id, seed)` tumba la segunda. `episode()` es para el backfill.
+
+**Las columnas van en SI y los `payload` de eventos en mm y grados.** Contradice la regla
+general del proyecto y es la incoherencia que más fácil se cuela.
+
+```
+perceive  {seen, confidence}          pick    {mass_kg, type}
+plan      {layer, slot}               settle  {layer, drift_mm}
+place     {error_xy_mm, error_yaw_deg, overhang_mm}
+fail      {cause}
+```
+
+Y la asimetría que hay que tener clarísima:
+
+- **En `payload` (que es `jsonb`), sobrar es inocuo y faltar rompe.** Puedes añadir
+  `score` al `plan` o `cog_offset_mm` al `pick` sin miedo. Pero si falta una de las
+  claves de arriba, la interfaz **no enseña nada y no da error**.
+- **En el nivel de la fila, sobrar es letal.** `event/placement/pallet_state/snapshot`
+  son `**kwargs` puros y cada clave es una columna: un nombre mal escrito es un 400 que
+  el SDK se traga, y a partir de ahí la subida queda apagada **para el resto de la
+  ejecución**.
+
+**`seq` es único por episodio, no por paquete.** Hay cinco o seis eventos por paquete. Un
+contador del episodio entero (`len(episode.events)`) lo resuelve; el índice del paquete,
+no. Un duplicado tumba la fila y, con ella, la subida del resto del episodio.
+
+**Una fila de `pallet_states` por paquete INTENTADO**, incluido el que derrumba el montón
+y los que fallaron antes de depositar. Es justo la que hace que la traza de CoG cruce el
+cero. Si solo emites los que salieron bien, la traza acaba en verde en un episodio que se
+cayó y el gráfico deja de servir para lo único que existe: dejar ver venir el fallo
+varias colocaciones antes.
+
+**El CoG cuenta las cajas fuera de tolerancia.** Una caja mal puesta sigue pesando y sigue
+moviendo el centro de gravedad. Lo que NO cuenta es la que se quedó en la mesa: el
+criterio es geométrico —¿su huella toca el palé?—, no "¿falló la maniobra?". Ver
+`measure.on_pallet`.
+
+**El margen de estabilidad se mide contra el polígono de soporte**, la envolvente de las
+huellas de la capa 1, no contra el borde del palé. Contra el palé los números salen
+optimistas y la pantalla dice que todo va bien hasta el derrumbe.
+
+**Tres vocabularios cerrados.** Inventar un valor no da error donde lo escribes:
+
+- `events.kind`: `perceive | plan | pick | place | settle | fail`. **No hay kind para la
+  cinta** (ver §6).
+- `snapshots.view`: `top | side | iso | camera`. Con otro nombre el PNG sube a Storage y
+  **luego** la base rechaza la fila con un `23514`: la foto queda huérfana y la traza sin
+  imagen. Al repo anterior le pasó con `front`.
+- `failure`: `no_detection`, `ik_unreachable`, `collision`, `grasp_slip`,
+  `wrong_placement`, `timeout`, `stack_collapse`, `overhang_violation`. `EpisodeResult`
+  lanza `ValueError` con cualquier otro, a propósito. Añadir uno obliga a tocar tres
+  sitios en Platform: pídeselo a quien lleve el backend, no lo inventes aquí.
+
+Y `task` tiene que ser **`"palletizing"`**, que también lo valida el SDK.
+
+**`synthetic` no lo escribe esta simulación** (es para datos sembrados), `git_sha` y
+`oracle` van en el run y no se repiten por episodio, y `status` sale de
+`EpisodeResult.success`: no lo calcules.
+
+**`config.pallet_size_m` es obligatorio.** La interfaz dibuja a escala real y
+`palletSize()` lo busca en `runs.config` primero. Sin él supone un europeo de 1200×800 y,
+si trabajas con una maqueta, todas las cotas salen mal por el factor de escala. En
+`config` cabe lo que quieras describir de la celda: velocidades, capas, escala, cinta.
+
+**Las fotos, una por capa, y con el brazo apartado en CARTESIANO.** El brazo acaba justo
+encima del palé, que es donde estaba soltando: sin apartarlo la cenital sale del dorso de
+la mano. Y apartarlo en espacio de juntas deja el recorrido sin controlar y barre el
+montón recién colocado: medido en el repo anterior, el episodio pasaba de 10/10 a 4/10
+con `overhang_violation` en cuanto se metió la foto por capa. El `after_seq` de la foto
+casa con el de la traza de CoG: la imagen y ese punto del gráfico son el mismo instante.
+
+## 6. Lo nuevo respecto al guionizado
+
+### La cinta
+
+Se para para que el robot coja. `cell/conveyor.py` la modela y expone dos cosas:
+`present()` —avanza hasta que el paquete llega a la estación de recogida y **para**— y
+`release()` —vuelve a arrancar cuando la mano ya no está encima—.
+
+Dos avisos:
+
+- **La cinta no tiene evento propio.** `events.kind` es un CHECK cerrado de seis valores
+  y ninguno es suyo. Su estado viaja en el `payload` de `perceive` (donde sobrar es
+  inocuo) o no viaja. No inventes un kind: la fila la rechaza la base y se apaga la
+  subida del resto del run.
+- **Un atasco se reporta como `timeout`.** No hay causa de fallo para "la cinta no
+  entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si entrega
+  pero la percepción no ve nada, es `no_detection`. Son cosas distintas y conviene no
+  mezclarlas, porque el gráfico de fallos las separa.
+
+### El centro de gravedad
+
+El paquete deja de tener el CoG en su centro geométrico: cada tipo lleva un
+`cog_offset_m` en el catálogo. Eso toca **tres** sitios y hay que hacerlos los tres o la
+mejora no significa nada:
+
+1. **`vision/gauge.py` lo estima**, no lo lee del catálogo — es justo lo que la medición
+   aporta. Si el gauge devuelve el valor exacto del YAML, sigues teniendo un oráculo con
+   otro nombre.
+2. **`planner/heuristic.py` lo puntúa**: un paquete con el CoG descentrado apoyado al
+   borde del montón es un derrumbe con retraso. Es un término del score, no un filtro.
+3. **`measure.pallet_state` lo usa** en vez del centro de la caja al acumular el CoG del
+   palé. Esto es un cambio real sobre el `measure.py` portado, y es el único que hay que
+   hacerle: mientras no se haga, la traza dice que el montón está centrado cuando no lo
+   está.
+
+`stability_margin` y `support_polygon` **se importan de `theker_telemetry`**, no se
+reimplementan: una tercera copia acabaría discrepando con la que usa la interfaz, que es
+el indicador que la define entera.
+
+### La heurística
+
+Mide la altura de todo el palé y de sus paquetes, y con las dimensiones del que tiene en
+la mano puntúa cada hueco candidato. El score es un número entre 0 y 1 y el hueco elegido
+es el máximo.
+
+Tres cosas que van en el diseño desde el principio:
+
+- **El mapa de alturas se mide, no se lleva en un contador.** Si el planificador arrastra
+  su propia idea de cómo está el palé, a la tercera caja torcida deja de coincidir con la
+  realidad y ya no se recupera. `heightmap.py` lo saca del estado de la escena.
+- **El score devuelve su desglose**, no solo el total. Va al `payload` del evento `plan`
+  junto a `layer` y `slot` (sobrar es inocuo), y es lo que permite responder "¿por qué
+  puso esa caja ahí?" sin volver a correr el episodio.
+- **Un hueco sin candidato válido no es una excepción**: es un `wrong_placement` que hay
+  que decidir y registrar, no un crash.
+
+## 7. Lo que se porta, y no se reescribe
+
+En `~/HackSpain/paletizado-guionizado` (remoto: `STACKSPECT/Guionized-simulation`) hay
+código probado, con tests y con las calibraciones medidas. Se copia; **no se reescribe
+"mejor"**:
+
+| De allí | A aquí | Cómo |
+|---|---|---|
+| `src/pallet/measure.py` | `src/measure.py` | Tal cual, con su `demo()` de asserts. Único cambio: `pallet_state` acumula con `cog_offset_m` (§6) |
+| `src/control/arm.py` | `src/cell/arm.py` | Tal cual |
+| `src/cell.py` | `src/cell/__init__.py` | Tal cual: mesa, frame del TCP, `lookat_quat` |
+| `src/pallet/scene.py` | `src/cell/scene.py` | El `MjSpec`, las cámaras y la iluminación. Se le añade la cinta y las cajas dejan de salir del guion |
+| `src/pallet/telemetry.py` | `src/telemetry.py` | Las funciones de fila son el contrato y están verificadas contra el esquema. Cambia `oracle` (§3) y `metrics` gana el score de la heurística |
+| `tests/test_pallet.py` | `tests/test_pallet.py` | Ancla los vocabularios y los nombres de columna sin arrancar el simulador |
+| cabecera de `configs/pallet.yaml` | `configs/pallet.yaml` | Las cifras calibradas (abajo) |
+
+**Las cifras calibradas, con su porqué, están en la cabecera de aquel `pallet.yaml`.** No
+se ajustan a ojo:
+
+- `cartesian_speed` **0.0625** — un cuarto de la nominal. Por encima la caja se escurre de
+  la pinza y llega 15-20 mm desplazada. No es el peso (probado de 0.03 a 0.13 kg, mismo
+  deslizamiento): es la aceleración del tramo.
+- **23 mm entre cajas vecinas en el eje de cierre** — los impone el dedo, no la caja:
+  10.5 mm de grueso más lo que se abre al soltar. Es también el techo de ocupación del
+  palé (72-76 %) y el argumento más claro para pasarse a ventosa.
+- `drop_clearance` **8 mm** — el fondo de la curva medida: 20 mm → 5.1 mm de error,
+  8 mm → 1.9 mm, 2 mm → 3.9 mm.
+- **La pinza no se abre del todo para soltar**, solo 3 mm por lado; se abre entera ya en
+  alto y lejos del montón.
+
+> **Todas son del gripper del Panda.** En cuanto se decida el robot —y está sin decidir—
+> hay que **volver a medirlas**, no copiarlas. La tabla de medida está en aquella
+> cabecera: se repite, no se estima. Lo mismo con el barrido de alcance del IK.
+
+## 8. Qué NO hacer
+
+- **No metas conocimiento de la plataforma fuera de `src/telemetry.py`.** Es la única
+  frontera: el resto del código no debería conocer el nombre de ninguna columna. Lo que
+  cruza los módulos son objetos de `contracts.py`, no filas.
+- **No reimplementes `stability_margin` ni `support_polygon`.** Vienen del SDK.
+- **No inventes `kind`s de evento, vistas de foto ni causas de fallo.** Los tres son
+  vocabularios cerrados y los tres fallan tarde y en silencio.
+- **No hagas que un módulo lea la escena por su cuenta.** Si `heuristic.py` importa
+  `mujoco`, algo se ha torcido: lo que necesita es el `Heightmap` y el `PackageSpec`. La
+  excepción son los stubs-oráculo, que existen precisamente para hacer trampa, y por eso
+  viven en ficheros aparte con el nombre puesto.
+- **No toques `configs/` a ojo.** Cada valor raro tiene su medida al lado; si cambias uno,
+  deja escrito cómo lo mediste.
+- **No añadas dependencias** sin mirar antes si MuJoCo o numpy ya lo hacen.
+
+## 9. Cómo se comprueba, en este orden
+
+1. **Sin red ni simulador:** `python tests/test_pallet.py`. Que las claves de cada fila
+   sean las columnas de su tabla, que los `seq` no se repitan, que las vistas y las
+   causas de fallo estén en su vocabulario. Falla en segundos, no tras tres minutos de
+   simulación.
+2. **La medida, sola:** `python -m src.measure`. Sus asserts cubren el CoG con cajas
+   fuera de tolerancia y el margen contra el polígono de soporte.
+3. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry`. Un episodio
+   entero a disco; mira el `episodes.jsonl`.
+4. **Con telemetría, y que diga en qué modo va.** Si no imprime que está activa, no lo
+   está.
+5. **Con `/` abierto en el navegador.** Es la prueba de verdad: el episodio aparece **en
+   curso** a los pocos segundos, el palé se monta paquete a paquete, los KPIs se mueven
+   solos y al acabar pasa a terminado con su éxito o su causa de fallo.
+6. **Contra la base**, después:
+
+```sql
+-- una fila de traza por paquete intentado
+select count(*) from pallet_states where episode_id = '<id>';
+-- vacío: ningún seq repetido
+select seq from events where episode_id = '<id>' group by seq having count(*) > 1;
+-- las fotos, y que su after_seq case con la traza
+select after_seq, view, width, height from snapshots
+ where episode_id = '<id>' order by after_seq, view;
+-- basura de ejecuciones abortadas: tiene que ser 0
+select count(*) from episodes where status = 'running';
+```
+
+Si la interfaz no reacciona, descarta esto antes de buscar en tu código: nada nunca → no
+estás subiendo; el palé aparece ya montado → estás usando `episode()` en vez de
+`begin()`/`end()`; Live clavada en un episodio viejo → un huérfano en `running`; las
+cajas diminutas en un palé enorme → falta `config.pallet_size_m`; la ejecución no sale en
+Ejecuciones → esa pantalla no se refresca sola, recarga.

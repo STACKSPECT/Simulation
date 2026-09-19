@@ -1,0 +1,7 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+# Las ejecuciones son la fuente de verdad en disco, pero no del repo.
+runs/
+third_party/

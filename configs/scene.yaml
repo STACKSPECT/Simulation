@@ -1,0 +1,60 @@
+# La celda: brazo, mesa, cinta y parámetros de movimiento. Unidades SI.
+#
+# Esto describe el BANCO DE TRABAJO, no la tarea. Lo que se hace encima —el palé, el
+# catálogo de paquetes y los pesos de la heurística— está en `pallet.yaml`, que además
+# pisa algunos valores de `motion` porque la carga de paletizado obliga a ir más despacio.
+#
+# PORTAR los bloques `robot`, `table` y `motion` desde
+# `~/HackSpain/paletizado-guionizado/configs/scene.yaml`. Están comprobados contra el
+# alcance real del brazo: se resolvió IK sobre una rejilla del área de trabajo a las
+# alturas de agarre, depósito y tránsito y no quedó ninguna pose fuera.
+#
+# ── EL ROBOT ESTÁ SIN DECIDIR ─────────────────────────────────────────────────
+# `robot.model` apunta a un `scene.xml` del Menagerie y cambiar de brazo es cambiar esa
+# ruta... y volver a medir TODO lo demás. `tcp_offset`, `gripper_max_opening`,
+# `observe_qpos` y las tolerancias de convergencia son del hardware, no del proyecto.
+# La cabecera de `pallet.yaml` dice qué hay que remedir y cómo se midió la primera vez.
+
+robot:
+  model:                          # third_party/mujoco_menagerie/<brazo>/scene.xml
+  ik_frame: tcp                   # site que añade src/cell/scene.py, en el TCP
+  tcp_offset:                     # del frame de la mano a las almohadillas
+  gripper_actuator:               # índice en data.ctrl
+  gripper_max_opening:            # nada más ancho se puede agarrar
+  observe_qpos:                   # pose de observación, SOLO para la foto final
+
+table:
+  center:
+  size:                           # SEMIEJES (lo que quiere MuJoCo)
+  height:                         # z de la superficie
+  friction:
+  rgba:
+
+# La cinta. No existe en el repo guionizado: esto se diseña de cero.
+#
+# `station` es donde el paquete se PARA para que el brazo lo coja, y tiene que estar
+# dentro del alcance comprobado del brazo. Si la mueves, repite el barrido de IK.
+conveyor:
+  center:                         # [x, y] de la banda, en el mundo
+  dims:                           # [largo, ancho] de la banda
+  height:                         # z de la superficie de la banda
+  speed:                          # m/s con la cinta en marcha
+  station:                        # [x, y] de la estación de recogida
+  spacing:                        # separación entre paquetes consecutivos
+  timeout_s:                      # sin entrega en este tiempo -> `timeout`
+
+motion:
+  cartesian_speed:                # m/s de la interpolación entre waypoints
+  angular_speed:
+  drop_clearance:                 # altura de suelta sobre el destino
+  settle_steps:                   # pasos de física para que la escena se asiente
+  # Knobs de convergencia. Las tolerancias van POR ENCIMA del suelo medido del servo
+  # (caída estacionaria bajo carga): por debajo, `move_to` no converge nunca y todo
+  # acaba declarado `ik_unreachable`.
+  converge_s:
+  tol_pos:
+  tol_rot:
+  posture_cost:
+
+episode:
+  control_hz: 50
