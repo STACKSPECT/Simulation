@@ -954,7 +954,8 @@ class PalletScene:
         self.viewer = None
 
         self._compile(build_mjcf(cfg, level, boxes, None, simplified=simplified))
-        self.home = np.asarray(cfg["robot"]["observe_qpos"], dtype=float)
+        self.home = np.asarray(cfg["robot"]["ik_seed_qpos"], dtype=float)
+        self.observe_qpos = np.asarray(cfg["robot"]["observe_qpos"], dtype=float)
         self.data.qpos[self.arm_qpos] = self.home
         self.data.ctrl[:] = self.home
         mujoco.mj_forward(self.model, self.data)
