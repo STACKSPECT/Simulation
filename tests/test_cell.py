@@ -18,10 +18,31 @@ from src.cell import tcp_frame  # noqa: E402
 from src.cell.arm import ArmController  # noqa: E402
 from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
-from src.cell.scene import build_scene  # noqa: E402
+from src.cell.scene import build_catalogue, build_scene, levels, load_configs  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
 from src.vision.oracle import OracleDetector  # noqa: E402
+
+
+def test_levels_declare_distinct_loads() -> None:
+    """Mesa, cinta y camión no son el mismo escenario con otro título."""
+    cfg = load_configs()
+    catalogue = levels(cfg)
+    assert catalogue[11].source == "table"
+    assert catalogue[21].source == "conveyor"
+    assert catalogue[31].source == "truck"
+    load_11 = build_catalogue(cfg, catalogue[11], seed=1)
+    load_13 = build_catalogue(cfg, catalogue[13], seed=1)
+    load_31 = build_catalogue(cfg, catalogue[31], seed=1)
+    assert len(load_11) == 4
+    assert len(load_13) == 8
+    assert len(load_31) == 5
+    assert {box.type_name for box in load_11} == {"std_m"}
+    assert {box.type_name for box in load_13} == {"random"}
+    assert catalogue[11].cog == "centred"
+    assert catalogue[13].cog == "adversarial"
+    assert catalogue[13].pos_jitter_m > catalogue[11].pos_jitter_m
+    assert catalogue[13].yaw_jitter_deg > catalogue[11].yaw_jitter_deg
 
 
 def test_scenes_compile_for_all_sources() -> None:

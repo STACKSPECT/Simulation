@@ -1,20 +1,21 @@
 """Browser control panel for the palletizing demonstrator.
 
-Pick a prepared experiment, press play and watch it in the MuJoCo window. While it runs
-the page keeps the switches that are safe to change live -- speed, fast-forward, the
-centre-of-mass markers -- and a transport bar that pauses the cell and steps back
-through what has already happened.
+Pick a level, press play and watch it in the MuJoCo window. Every switch is read once,
+when the run starts, and travels as a flag on the command line: `scripts/palletize.py`
+reports over a one-way pipe, so nothing can be changed once it is running. The transport
+bar and the live switches of the old local runner are disabled in the page for that
+reason -- see the `disabled` marks in `web/index.html`.
 
-Three processes, each with one job. Execution uses the migrated entrypoint; debugging
-keeps the original local runner and never opens a telemetry episode:
+Three processes, each with one job. Both modes launch the migrated entrypoint with the
+selected source and level. Execution may upload; debugging always passes
+`--no-telemetry` and never opens a remote episode:
 
     browser  <--HTTP/SSE-->  this server  <--JSON over pipes-->  scripts/palletize.py
-                                                        \---->  stable_pallet.runner
 
-Nothing in this module touches MuJoCo. It forwards control messages to the runner and
-republishes whatever the runner reports to every page that is listening, which is why
-the handlers below are all a few lines long: the worst any of them can do is put a dict
-on a queue.
+Nothing in this module touches MuJoCo. Of the control messages the page can send only
+`cancel` means anything -- it stops the child -- and everything the child reports is
+republished to every page that is listening, which is why the handlers below are all a
+few lines long: the worst any of them can do is put a dict on a queue.
 
 The server is stdlib only -- no framework, no bundler, no network at start-up -- so the
 demonstrator keeps working on a laptop with the wifi switched off.
@@ -36,7 +37,7 @@ from typing import Any
 import yaml
 
 from .controls import SPEED_PRESETS
-from .runner import RunnerClient, interpreter
+from .runner import interpreter, is_viewer_noise
 
 STATIC = Path(__file__).parent / "web"
 REPO = Path(__file__).resolve().parents[2]
@@ -86,6 +87,37 @@ def _catalogue() -> list[dict[str, Any]]:
     ]
 
 
+def _palletize_argv(request: dict[str, Any]) -> list[str]:
+    """La línea de `scripts/palletize.py` para el nivel elegido.
+
+    DEPURACIÓN añade `--no-telemetry` para que el entrypoint no abra subida. La puerta
+    HTTP (`_run_request`) siempre manda `mode`, y un `POST /api/run` sin él sube: es la
+    regla «se sube por defecto» de `AGENTS.md` §5. El `debug` de aquí sólo cubre a quien
+    construya la petición a mano.
+    """
+    python = REPO / ".venv" / "bin" / "python"
+    argv = [
+        interpreter(bool(request.get("viewer")), python if python.exists() else None),
+        str(REPO / "scripts" / "palletize.py"),
+        "--protocol", "json",
+        "--source", str(request["source"]),
+        "--level", str(request["level"]),
+        "-n", "1",
+    ]
+    if str(request.get("mode", "debug")) != "execution":
+        argv.append("--no-telemetry")
+    if request.get("viewer"):
+        argv.append("--viewer")
+    if request.get("simplified_graphics"):
+        argv.append("--simplified-graphics")
+    if request.get("show_com"):
+        argv.append("--show-com")
+    argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
+    if request.get("seed") is not None:
+        argv.extend(("--seed", str(int(request["seed"]))))
+    return argv
+
+
 def unwind_child(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
     """Pide al hijo que deshaga. ``terminate()`` (SIGTERM) no recorre ``finally``.
 
@@ -122,23 +154,9 @@ class PalletizeClient:
         *,
         argv: list[str] | None = None,
     ) -> None:
+        # `argv` es la costura de los tests: inyecta un hijo falso sin tocar la petición.
         if argv is None:
-            python = REPO / ".venv" / "bin" / "python"
-            argv = [
-                interpreter(bool(request.get("viewer")), python if python.exists() else None),
-                str(REPO / "scripts" / "palletize.py"),
-                "--protocol", "json",
-                "--source", str(request["source"]),
-                "--level", str(request["level"]),
-                "-n", "1",
-            ]
-            if request.get("viewer"):
-                argv.append("--viewer")
-            if request.get("simplified_graphics"):
-                argv.append("--simplified-graphics")
-            argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
-            if request.get("seed") is not None:
-                argv.extend(("--seed", str(int(request["seed"]))))
+            argv = _palletize_argv(request)
         self.on_message = on_message
         self.process = subprocess.Popen(
             argv, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -160,8 +178,9 @@ class PalletizeClient:
 
     def _read_errors(self) -> None:
         for line in iter(self.process.stderr.readline, ""):
-            if line.strip():
-                self.on_message({"kind": "log", "text": line.rstrip()})
+            line = line.rstrip()
+            if line and not is_viewer_noise(line):
+                self.on_message({"kind": "log", "text": line})
 
     def is_running(self) -> bool:
         return self.process.poll() is None
@@ -181,7 +200,7 @@ class Session:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._listeners: set[queue.Queue[dict[str, Any]]] = set()
-        self.client: RunnerClient | PalletizeClient | None = None
+        self.client: PalletizeClient | None = None
         self.state = _idle_state()
         self.log: list[dict[str, Any]] = []
         self.title: str = ""
@@ -234,8 +253,7 @@ class Session:
         self.title = title
         self.mode = str(request.get("mode", "debug"))
         self.publish({"kind": "started", "title": title, "mode": self.mode})
-        client = PalletizeClient if self.mode == "execution" else RunnerClient
-        self.client = client(request, self._on_runner_message)
+        self.client = PalletizeClient(request, self._on_runner_message)
 
     def send(self, message: dict[str, Any]) -> None:
         if self.client is not None and self.client.is_running():
@@ -262,6 +280,36 @@ class Session:
     def _remember(self, line: dict[str, Any]) -> None:
         self.log.append(line)
         del self.log[:-400]
+
+
+def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Traduce la tarjeta y el modo que eligió la página a la petición del entrypoint.
+
+    Los dos modos llevan `source` y `level`. DEPURACIÓN no elige un experimento legado:
+    `PalletizeClient` añade `--no-telemetry` según `mode`. Cualquiera de las dos casillas
+    de centro de masa enciende `--show-com`: el entrypoint sólo tiene esa bandera, y
+    pinta el CoG final del palé en el informe.
+    """
+    item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
+    if item is None:
+        raise ValueError(f"Experimento desconocido: {payload.get('experiment')!r}")
+    mode = str(payload.get("mode", "execution"))
+    if mode not in {"execution", "debug"}:
+        raise ValueError(f"Modo desconocido: {mode!r}")
+    viewer = bool(payload.get("viewer")) and item["watchable"]
+    request = {
+        "mode": mode,
+        "source": item["source"],
+        "level": item["level"],
+        "viewer": viewer,
+        "speed": float(payload.get("speed", 1.0)),
+        "fast_forward": bool(payload.get("fast_forward")),
+        "simplified_graphics": bool(payload.get("simplified_graphics")),
+        "show_com": bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com")),
+        "seed": payload.get("seed"),
+    }
+    title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"
+    return request, title
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -307,42 +355,7 @@ class _Handler(BaseHTTPRequestHandler):
     # -- handlers ----------------------------------------------------------------------
 
     def _run(self, payload: dict[str, Any]) -> None:
-        item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
-        if item is None:
-            raise ValueError(f"Experimento desconocido: {payload.get('experiment')!r}")
-        mode = str(payload.get("mode", "execution"))
-        if mode not in {"execution", "debug"}:
-            raise ValueError(f"Modo desconocido: {mode!r}")
-        viewer = bool(payload.get("viewer")) and item["watchable"]
-        if mode == "debug":
-            debug_key = "truck-unload" if item["source"] == "truck" else "palletize"
-            request = {
-                "mode": mode,
-                "experiment": debug_key,
-                "controls": {
-                    "speed": float(payload.get("speed", 1.0)),
-                    "fast_forward": bool(payload.get("fast_forward")),
-                    "show_true_com": bool(payload.get("show_true_com")),
-                    "show_estimated_com": bool(payload.get("show_estimated_com")),
-                },
-                "viewer": viewer,
-                "hold_at_end": bool(payload.get("hold_at_end")) and viewer,
-                "simplified_graphics": bool(payload.get("simplified_graphics")),
-                "measure_com": bool(payload.get("measure_com")),
-                "seed": payload.get("seed"),
-            }
-        else:
-            request = {
-                "mode": mode,
-                "source": item["source"],
-                "level": item["level"],
-                "viewer": viewer,
-                "speed": float(payload.get("speed", 1.0)),
-                "fast_forward": bool(payload.get("fast_forward")),
-                "simplified_graphics": bool(payload.get("simplified_graphics")),
-                "seed": payload.get("seed"),
-            }
-        title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"
+        request, title = _run_request(payload)
         self.session.start(request, title)
         self._json({"ok": True})
 

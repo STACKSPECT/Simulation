@@ -114,10 +114,14 @@
       <header class="panel-head"><h2>Arranque</h2></header>
       <div class="checks">
         <label class="check"><input type="checkbox" id="viewer" checked><span>Abrir la ventana 3D</span></label>
-        <label class="check"><input type="checkbox" id="measure-com" checked><span>Pesar cada caja en la muñeca</span></label>
+        <label class="check"><input type="checkbox" id="measure-com" checked disabled><span>Pesar cada caja en la muñeca</span></label>
         <label class="check"><input type="checkbox" id="simplified"><span>Gráficos simplificados</span></label>
-        <label class="check"><input type="checkbox" id="hold" checked><span>Dejar el visor abierto al acabar</span></label>
+        <label class="check"><input type="checkbox" id="hold" checked disabled><span>Dejar el visor abierto al acabar</span></label>
       </div>
+      <p class="hint">Las dos apagadas no tienen a qué llamar. <b>Pesar cada caja</b> es la
+      casilla del issue #25: sus banderas no hacen hoy lo que prometen, así que cablearla
+      sería peor que dejarla quieta. <b>Dejar el visor abierto</b> no tiene bandera en
+      <code>scripts/palletize.py</code>.</p>
       <div class="seed">
         <label for="seed">Semilla</label>
         <input type="number" id="seed" placeholder="la del experimento">
@@ -149,17 +153,19 @@
     </div>
 
     <div class="transport-row">
-      <button class="tbtn" data-act="start" title="Ir al principio"><svg><use href="#i-start"/></svg></button>
-      <button class="tbtn" data-act="backward" title="Reproducir hacia atrás"><svg><use href="#i-rewind"/></svg></button>
-      <button class="tbtn" data-act="prev" title="Un fotograma atrás"><svg><use href="#i-prev"/></svg></button>
-      <button class="tbtn tbtn-wide" id="pause" title="Pausar la ejecución"><svg><use href="#i-pause"/></svg><span>Pausa</span></button>
-      <button class="tbtn" data-act="next" title="Un fotograma adelante"><svg><use href="#i-next"/></svg></button>
-      <button class="tbtn" data-act="forward" title="Reproducir hacia delante"><svg><use href="#i-forward"/></svg></button>
-      <button class="tbtn" data-act="end" title="Ir al final"><svg><use href="#i-end"/></svg></button>
+      <button class="tbtn" data-act="start" title="Ir al principio" disabled><svg><use href="#i-start"/></svg></button>
+      <button class="tbtn" data-act="backward" title="Reproducir hacia atrás" disabled><svg><use href="#i-rewind"/></svg></button>
+      <button class="tbtn" data-act="prev" title="Un fotograma atrás" disabled><svg><use href="#i-prev"/></svg></button>
+      <button class="tbtn tbtn-wide" id="pause" title="Pausar la ejecución" disabled><svg><use href="#i-pause"/></svg><span>Pausa</span></button>
+      <button class="tbtn" data-act="next" title="Un fotograma adelante" disabled><svg><use href="#i-next"/></svg></button>
+      <button class="tbtn" data-act="forward" title="Reproducir hacia delante" disabled><svg><use href="#i-forward"/></svg></button>
+      <button class="tbtn" data-act="end" title="Ir al final" disabled><svg><use href="#i-end"/></svg></button>
     </div>
 
-    <p class="hint">Rebobinar revisa lo grabado: la ejecución espera donde estaba y sigue
-    desde ahí al reanudar.</p>
+    <p class="hint">Apagada: los dos modos lanzan <code>scripts/palletize.py --protocol
+    json</code>, que sólo informa (<code>log</code> y <code>finished</code>) y no manda
+    fotogramas. Sin grabación no hay nada que rebobinar ni que pausar. Vuelve a servir el
+    día que el entrypoint emita <code>state</code>.</p>
   </section>
 
   <section class="panel span-log">
