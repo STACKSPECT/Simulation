@@ -3,7 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Stable Pallet · panel de control</title>
+<title>STACKSPECT · Panel de ejecución</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/icon.png" type="image/png">
+<!-- Same rule as the platform: the saved choice wins, then the system theme. Runs before
+     the first paint so the page never flashes the wrong one. -->
+<script>
+  try {
+    var saved = localStorage.getItem("theme");
+    var dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch (e) {
+    document.documentElement.dataset.theme = "light";
+  }
+</script>
+<link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -22,11 +36,9 @@
 
 <header class="top">
   <div class="brand">
-    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
-      <path d="M4 22h24v4H4zM7 14h8v7H7zM17 14h8v7h-8zM11 6h10v7H11z"/>
-    </svg>
+    <span class="logo" role="img" aria-label="STACKSPECT"><span class="mark"></span><span class="word"></span></span>
     <div class="brand-text">
-      <h1>Stable Pallet</h1>
+      <h1>Panel de ejecución</h1>
       <p>Paletizado en lazo cerrado · UR10e · MuJoCo</p>
     </div>
   </div>
@@ -34,6 +46,10 @@
     <span class="mode-badge" id="mode-badge">EJECUCIÓN</span>
     <span class="status" id="status">Listo</span>
     <span class="link" id="link" title="Conexión con el servidor"></span>
+    <button type="button" class="icon-btn" id="theme-toggle" aria-label="Cambiar de tema">
+      <svg class="i-sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+      <svg class="i-moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8Z"/></svg>
+    </button>
   </div>
 </header>
 

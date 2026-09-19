@@ -186,9 +186,11 @@ def test_the_page_and_its_assets_are_served(served: Any) -> None:
     base, _ = served
     status, body = get(base, "/")
     assert status == 200
-    assert b"Stable Pallet" in body
-    assert get(base, "/app.css")[0] == 200
-    assert get(base, "/app.js")[0] == 200
+    assert b"STACKSPECT" in body
+    for asset in ("/app.css", "/app.js", "/tokens.css", "/brand/mark.png", "/brand/wordmark.png",
+                  "/favicon.ico", "/icon.png", "/fonts/PlusJakartaSans-latin.woff2",
+                  "/fonts/GeistMono-latin.woff2"):
+        assert get(base, asset)[0] == 200, asset
 
 
 def test_the_catalogue_is_served_with_the_speed_presets(served: Any) -> None:
