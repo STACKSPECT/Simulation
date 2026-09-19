@@ -1,7 +1,68 @@
+# Entorno virtual. Lo crea `scripts/setup.sh`; nunca se versiona.
 .venv/
-.env
+venv/
+env/
+
+# Bytecode y cachés de Python.
 __pycache__/
-*.pyc
+*.py[cod]
+*.so
+.Python
+
+# Cachés de herramientas. Ninguna se usa hoy —los tests son asserts planos corridos como
+# script, ver CONTRIBUTING.md— pero aparecen en cuanto alguien las prueba en local.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+
+# Artefactos de empaquetado.
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+
 # Las ejecuciones son la fuente de verdad en disco, pero no del repo.
+# El `episodes.jsonl` y las PNG del palé son el RESULTADO de un episodio, y hasta que se
+# replican a Supabase son la única copia que existe. No las borres a la ligera.
 runs/
+
+# El modelo del brazo se clona, no se versiona: son megas de mallas con su propia
+# licencia (ver README, "Dependencies"). `scripts/setup.sh` lo trae.
 third_party/
+
+# Credenciales de Supabase. Viven fuera del repo a propósito: `SUPABASE_SERVICE_KEY` se
+# salta el RLS. Lo que sí se versiona es `.env.example`, que no lleva valores.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Logs y volcados sueltos.
+*.log
+core.*
+
+# Ajustes locales de herramientas de agente. El fichero compartido es `AGENTS.md`.
+.claude/settings.local.json
+
+# Editores.
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema operativo.
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
