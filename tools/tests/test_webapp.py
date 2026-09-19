@@ -14,11 +14,11 @@ import pytest
 from stable_pallet import runner as runner_module
 from stable_pallet import webapp
 from stable_pallet.runner import interpreter, is_viewer_noise
-from stable_pallet.webapp import LISTENER_BACKLOG, Session, _catalogue, _Server
+from stable_pallet.webapp import LISTENER_BACKLOG, Session, _catalogue, _palletize_argv, _run_request, _Server
 
 
 class FakeRunner:
-    """A `RunnerClient` that records instead of starting a process."""
+    """A `PalletizeClient` that records instead of starting a process."""
 
     instances: list[FakeRunner] = []
 
@@ -42,7 +42,6 @@ class FakeRunner:
 @pytest.fixture
 def runner(monkeypatch: pytest.MonkeyPatch) -> type[FakeRunner]:
     FakeRunner.instances = []
-    monkeypatch.setattr(webapp, "RunnerClient", FakeRunner)
     monkeypatch.setattr(webapp, "PalletizeClient", FakeRunner)
     return FakeRunner
 
@@ -235,19 +234,89 @@ def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, 
     assert request["seed"] == 11
 
 
-def test_debug_mode_uses_the_local_runner_without_telemetry(served: Any, runner: type[FakeRunner]) -> None:
-    base, _ = served
-    post(base, "/api/run", {
-        "experiment": "level-11", "mode": "debug", "viewer": True,
-        "hold_at_end": True, "measure_com": False,
-    })
+LEVELS = (
+    ("level-11", "table", 11),
+    ("level-13", "table", 13),
+    ("level-21", "conveyor", 21),
+    ("level-23", "conveyor", 23),
+    ("level-31", "truck", 31),
+    ("level-33", "truck", 33),
+)
 
+
+@pytest.mark.parametrize("mode", ["execution", "debug"])
+@pytest.mark.parametrize(("key", "source", "level"), LEVELS)
+def test_the_selected_level_reaches_the_entrypoint(
+    mode: str, key: str, source: str, level: int,
+) -> None:
+    """DEPURACIÓN used to collapse every mesa/cinta card onto `palletize` and every
+    camión card onto `truck-unload`. The title changed; the scene did not."""
+    request, title = _run_request({"experiment": key, "mode": mode, "seed": 1})
+    assert request == {
+        "mode": mode,
+        "source": source,
+        "level": level,
+        "viewer": False,
+        "speed": 1.0,
+        "fast_forward": False,
+        "simplified_graphics": False,
+        "seed": 1,
+    }
+    assert title.startswith("EJECUCIÓN · " if mode == "execution" else "DEPURACIÓN · ")
+
+
+def test_debug_mode_does_not_collapse_distinct_levels() -> None:
+    seen: list[tuple[str, int]] = []
+    titles: list[str] = []
+    for key, source, level in LEVELS:
+        request, title = _run_request({"experiment": key, "mode": "debug", "seed": 1})
+        seen.append((request["source"], request["level"]))
+        titles.append(title)
+        assert (request["source"], request["level"]) == (source, level)
+    assert len(set(seen)) == len(LEVELS)
+    assert len(set(titles)) == len(LEVELS)
+    assert {source for source, _ in seen} == {"table", "conveyor", "truck"}
+
+
+def test_debug_mode_starts_palletize_with_the_selected_level(served: Any, runner: type[FakeRunner]) -> None:
+    base, _ = served
+    status, body = post(base, "/api/run", {"experiment": "level-23", "mode": "debug", "seed": 1})
+    assert (status, body) == (200, {"ok": True})
     request = runner.instances[-1].request
     assert request["mode"] == "debug"
-    assert request["experiment"] == "palletize"
-    assert request["viewer"] is True
-    assert request["hold_at_end"] is True
-    assert request["measure_com"] is False
+    assert request["source"] == "conveyor"
+    assert request["level"] == 23
+    assert "--no-telemetry" in _palletize_argv(request)
+
+
+def test_debug_mode_passes_no_telemetry_and_the_chosen_level() -> None:
+    argv = _palletize_argv({
+        "mode": "debug", "source": "table", "level": 13, "speed": 1.0, "seed": 1,
+    })
+    assert "--no-telemetry" in argv
+    assert argv[argv.index("--source") + 1] == "table"
+    assert argv[argv.index("--level") + 1] == "13"
+    assert argv[argv.index("--seed") + 1] == "1"
+
+
+def test_execution_mode_keeps_the_default_upload_path() -> None:
+    argv = _palletize_argv({
+        "mode": "execution", "source": "truck", "level": 33, "speed": 1.0,
+    })
+    assert "--no-telemetry" not in argv
+    assert argv[argv.index("--source") + 1] == "truck"
+    assert argv[argv.index("--level") + 1] == "33"
+
+
+def test_debug_argv_changes_when_the_level_changes() -> None:
+    commands = [
+        tuple(_palletize_argv({
+            "mode": "debug", "source": source, "level": level, "speed": 1.0, "seed": 1,
+        }))
+        for _, source, level in LEVELS[:4]
+    ]
+    assert len(set(commands)) == 4
+    assert all("--no-telemetry" in command for command in commands)
 
 
 def test_an_unknown_experiment_is_refused(served: Any) -> None:

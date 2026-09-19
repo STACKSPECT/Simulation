@@ -441,7 +441,9 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
    solos y al acabar pasa a terminado con su éxito o su causa de fallo.
 8. **El demostrador:** `cd tools && uv run pytest`.
 9. **El panel:** un nivel de mesa, cinta y camión en EJECUCIÓN y DEPURACIÓN; el modo
-   debe estar visible y DEPURACIÓN debe avisar que no publica.
+   debe estar visible y DEPURACIÓN debe avisar que no publica. Cambiar de nivel tiene
+   que cambiar la carga (catálogo, número, ruido, CoG), no solo el título de la
+   tarjeta: DEPURACIÓN no puede colapsar las nueve en el experimento legado.
 10. **Contra la base**, después:
 
 ```sql
