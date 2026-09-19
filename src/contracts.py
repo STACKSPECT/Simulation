@@ -155,7 +155,16 @@ class Sink(Protocol):
 
     Existe por la pantalla Live: la plataforma quiere las filas según se producen, no un
     volcado al final. Lo que pasa por aquí son objetos de dominio, no filas.
+
+    `begin`/`end` abren y cierran el episodio, y van aquí porque el entrypoint los llama:
+    un sink que sólo implementara los cuatro de abajo lo rompería. Lo que devuelve `end`
+    es el resumen del episodio, sin tipar a propósito: tiparlo metería el nombre de una
+    clase de la plataforma en este fichero, que es justo lo que `telemetry.py` evita.
     """
+
+    def begin(self, seed: int) -> None: ...
+
+    def end(self, episode) -> object: ...
 
     def placement(self, index: int, placement) -> None: ...
 

@@ -14,9 +14,10 @@ apuntan. El proyecto es MIT (ver `LICENSE`).
 
 ## 1. Qué es esto
 
-Una simulación de paletizado **de verdad**: un brazo coge paquetes de una cinta que se
-para, los mide, decide dónde van y los apila en un palé. La física es MuJoCo, las
-métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
+Una simulación de paletizado **de verdad**: un UR10e con ventosa OnRobot VGP20 coge
+paquetes de una mesa, una cinta o un remolque, los mide, decide dónde van y los apila
+en un europalé. Hay nueve niveles seleccionables —tres por fuente—. La física es
+MuJoCo, las métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
 
 El predecesor —`STACKSPECT/Guionized-simulation`— hacía lo mismo con el hueco de cada
 caja escrito en un YAML. Existía para fijar el contrato con la plataforma y recorrerlo
@@ -26,7 +27,7 @@ diferencia no es cosmética:
 | | guionizado | aquí |
 |---|---|---|
 | dónde va cada caja | escrito en `configs/pallet.yaml` | lo decide la heurística con lo que ve y lo que mide |
-| qué hay en la cinta | nada, las cajas esperan colocadas en la mesa | lo dice la percepción, y puede equivocarse |
+| qué entrega la fuente | nada, las cajas esperan colocadas en la mesa | lo dice la percepción, y puede equivocarse |
 | dimensiones del paquete | del catálogo | se miden con el paquete ya en la mano |
 | `oracle` del run | `true` | **`false`** en cuanto no queda ningún stub |
 | `no_detection` | inalcanzable | alcanzable |
@@ -38,9 +39,9 @@ abrir la de los demás.
 
 | Capa | Carpeta | Qué hace |
 |---|---|---|
-| **Visión** | `src/vision/` | Ve el paquete parado en la cinta (`detect.py`) y lo **mide** ya en la mano: dimensiones, masa, centro de gravedad (`gauge.py`) |
+| **Visión** | `src/vision/` | Ve el paquete que la fuente presenta (`detect.py`) y lo **mide** ya en la mano: dimensiones, masa, centro de gravedad (`gauge.py`) |
 | **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`) |
-| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, **cinta** que arranca y para, cámaras (`scene.py`, `arm.py`, `conveyor.py`, `render.py`) |
+| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión— y cámaras (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`) |
 | Medida | `src/measure.py` | El resultado: error, apoyo, vuelo, CoG del palé, margen de estabilidad |
 | Trazabilidad | `src/telemetry.py` | **Única** frontera con la plataforma |
 
@@ -50,7 +51,7 @@ idioma, `src/contracts.py`.
 El ciclo de un paquete, que es también el orden en que se llaman los módulos:
 
 ```
-cinta avanza y PARA          cell.conveyor.present()
+la fuente entrega y PARA     cell.conveyor.Supply.present()
   -> se ve                   vision.detect.observe()      -> Observation
   -> se coge                 cell.arm                     (ejecución)
   -> se mide en la mano      vision.gauge.measure()       -> PackageSpec
@@ -88,6 +89,8 @@ en `scripts/palletize.py`. Sin eso, nadie puede probar lo suyo hasta que estén 
 cuatro, que es exactamente como se pierde una semana.
 
 Los stubs viven al lado de lo que sustituyen: `vision/oracle.py`, `planner/naive.py`.
+`naive.py` contiene además `BeamPlanner`: no es un stub, usa el beam search medido del
+demostrador y por tanto no activa `oracle`. Solo `GridPlanner` lo activa.
 
 **`oracle` del run es `any(stub en uso)`.** Un run con el detector oráculo NO es un run
 con percepción, y la interfaz no compara los dos: marcarlo mal invalida justo la
@@ -103,8 +106,14 @@ source .venv/bin/activate
 python scripts/palletize.py --viewer            # verlo
 python scripts/palletize.py -n 3                # 3 episodios; SUBE por defecto
 python scripts/palletize.py -n 3 --no-telemetry # sin subir, solo disco
+python scripts/palletize.py --source truck      # primer nivel de camión
+python scripts/palletize.py --level 23          # nivel concreto de cinta
+python scripts/palletize.py --no-oracle-gauge --no-telemetry --level 11
+python scripts/palletize.py --no-oracle-gauge --precise-com --no-telemetry --level 11
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
+python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
+cd tools && uv run pytest                       # el demostrador sobrevive a la mudanza
 ```
 
 El SDK `theker_telemetry` **no vive aquí**: es el contrato de lo que la plataforma
@@ -157,6 +166,15 @@ Y la asimetría que hay que tener clarísima:
 - **En `payload` (que es `jsonb`), sobrar es inocuo y faltar rompe.** Puedes añadir
   `score` al `plan` o `cog_offset_mm` al `pick` sin miedo. Pero si falta una de las
   claves de arriba, la interfaz **no enseña nada y no da error**.
+
+  Lo que esta celda manda hoy además del mínimo, y por qué: `perceive` lleva el estado de
+  la fuente (`source`, `pending`, `exhausted`, `jammed`) porque ninguna fuente tiene
+  evento propio (ver §6); `plan` lleva `score`, `breakdown` y `heightmap_top_mm`; `pick`
+  lleva `cog_offset_mm`, `active_cups` y `grip_capacity_ratio` —el agarre pierde margen
+  antes de resbalar, así que un `grasp_slip` se ve venir en el ratio—; y `place` lleva
+  `reach_residual_mm`, lo que el brazo NO llegó a corregir. Ese último distingue un
+  acierto limpio de un roce justo por debajo de `reach_tolerance`, que sin él acaban los
+  dos en `True`. Ninguno lo pinta la interfaz todavía: están guardados y consultables.
 - **En el nivel de la fila, sobrar es letal.** `event/placement/pallet_state/snapshot`
   son `**kwargs` puros y cada clave es una columna: un nombre mal escrito es un 400 que
   el SDK se traga, y a partir de ahí la subida queda apagada **para el resto de la
@@ -200,9 +218,10 @@ Y `task` tiene que ser **`"palletizing"`**, que también lo valida el SDK.
 `EpisodeResult.success`: no lo calcules.
 
 **`config.pallet_size_m` es obligatorio.** La interfaz dibuja a escala real y
-`palletSize()` lo busca en `runs.config` primero. Sin él supone un europeo de 1200×800 y,
-si trabajas con una maqueta, todas las cotas salen mal por el factor de escala. En
-`config` cabe lo que quieras describir de la celda: velocidades, capas, escala, cinta.
+`palletSize()` lo busca en `runs.config` primero. Aquí el palé es un europeo real de
+1,20 × 0,80 m y `scale` es 1. Sin el campo la coincidencia sería accidental y una
+variante a otra escala volvería a dibujarse mal. En `config` cabe la fuente, el nivel,
+el catálogo y las velocidades de la celda.
 
 **Las fotos, una por capa, y con el brazo apartado en CARTESIANO.** El brazo acaba justo
 encima del palé, que es donde estaba soltando: sin apartarlo la cenital sale del dorso de
@@ -213,19 +232,21 @@ casa con el de la traza de CoG: la imagen y ese punto del gráfico son el mismo 
 
 ## 6. Lo nuevo respecto al guionizado
 
-### La cinta
+### Las fuentes
 
-Se para para que el robot coja. `cell/conveyor.py` la modela y expone dos cosas:
-`present()` —avanza hasta que el paquete llega a la estación de recogida y **para**— y
-`release()` —vuelve a arrancar cuando la mano ya no está encima—.
+`cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. La
+mesa deja los bultos preparados y no mueve nada. La cinta avanza físicamente hasta la
+estación y se para. El camión presenta la carga completa y elige siempre la caja más
+alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
+encima de la fuente.
 
 Dos avisos:
 
-- **La cinta no tiene evento propio.** `events.kind` es un CHECK cerrado de seis valores
+- **Ninguna fuente tiene evento propio.** `events.kind` es un CHECK cerrado de seis valores
   y ninguno es suyo. Su estado viaja en el `payload` de `perceive` (donde sobrar es
   inocuo) o no viaja. No inventes un kind: la fila la rechaza la base y se apaga la
   subida del resto del run.
-- **Un atasco se reporta como `timeout`.** No hay causa de fallo para "la cinta no
+- **Un atasco se reporta como `timeout`.** No hay causa de fallo para "la fuente no
   entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si entrega
   pero la percepción no ve nada, es `no_detection`. Son cosas distintas y conviene no
   mezclarlas, porque el gráfico de fallos las separa.
@@ -238,7 +259,11 @@ mejora no significa nada:
 
 1. **`vision/gauge.py` lo estima**, no lo lee del catálogo — es justo lo que la medición
    aporta. Si el gauge devuelve el valor exacto del YAML, sigues teniendo un oráculo con
-   otro nombre.
+   otro nombre. La implementación es una lectura de muñeca a plomo: las dos componentes
+   horizontales salen exactas, la vertical se ancla al centro geométrico (nadie aguas
+   abajo la lee) y `--precise-com` deja el barrido de cuatro poses cuando hace falta.
+   Modelar el sello con una `weld` sesga el par; hay que reparentar el bulto a la
+   herramienta. Ver `pesaje-en-el-sitio.md`.
 2. **`planner/heuristic.py` lo puntúa**: un paquete con el CoG descentrado apoyado al
    borde del montón es un derrumbe con retraso. Es un término del score, no un filtro.
 3. **`measure.pallet_state` lo usa** en vez del centro de la caja al acumular el CoG del
@@ -267,39 +292,35 @@ Tres cosas que van en el diseño desde el principio:
 - **Un hueco sin candidato válido no es una excepción**: es un `wrong_placement` que hay
   que decidir y registrar, no un crash.
 
+Ya existe una línea base medida en `tools/`: frente a first-fit, el beam search pasó de
+50 % a 100 % de pilas estrictamente estables y redujo el descentramiento medio del CoM
+de 142 mm a 81 mm. Cualquier heurística nueva se compara contra esos números.
+
 ## 7. Lo que se porta, y no se reescribe
 
-En `~/HackSpain/paletizado-guionizado` (remoto: `STACKSPECT/Guionized-simulation`) hay
-código probado, con tests y con las calibraciones medidas. Se copia; **no se reescribe
-"mejor"**:
+El robot ya está decidido: **UR10e + OnRobot VGP20**. La ejecución procede del
+demostrador `stable_pallet`, que queda completo en `tools/`; las funciones de fila de
+telemetría siguen procediendo de `STACKSPECT/Guionized-simulation` porque ya estaban
+verificadas contra el esquema real.
 
-| De allí | A aquí | Cómo |
+| Origen | Destino | Qué se conserva |
 |---|---|---|
-| `src/pallet/measure.py` | `src/measure.py` | Tal cual, con su `demo()` de asserts. Único cambio: `pallet_state` acumula con `cog_offset_m` (§6) |
-| `src/control/arm.py` | `src/cell/arm.py` | Tal cual |
-| `src/cell.py` | `src/cell/__init__.py` | Tal cual: mesa, frame del TCP, `lookat_quat` |
-| `src/pallet/scene.py` | `src/cell/scene.py` | El `MjSpec`, las cámaras y la iluminación. Se le añade la cinta y las cajas dejan de salir del guion |
-| `src/pallet/telemetry.py` | `src/telemetry.py` | Las funciones de fila son el contrato y están verificadas contra el esquema. Cambia `oracle` (§3) y `metrics` gana el score de la heurística |
-| `tests/test_pallet.py` | `tests/test_pallet.py` | Ancla los vocabularios y los nombres de columna sin arrancar el simulador |
-| cabecera de `configs/pallet.yaml` | `configs/pallet.yaml` | Las cifras calibradas (abajo) |
+| `tools/stable_pallet/simulator.py` | `src/cell/scene.py`, `arm.py`, `render.py` | MJCF, UR10e, IK amortiguada, corrección cartesiana, VGP20 y cámaras |
+| `tools/stable_pallet/truck.py` | `src/cell/truck.py` | carga, orden de descarga y deriva |
+| `tools/stable_pallet/planner.py` | `src/planner/naive.py::BeamPlanner` | beam search, lookahead y modelo de estabilidad interno |
+| `Guionized-simulation/src/pallet/measure.py` | `src/measure.py` | geometría y `demo()`; el CoG añade `cog_offset_m` |
+| `Guionized-simulation/src/pallet/telemetry.py` | `src/telemetry.py` | claves de fila y ciclo de vida en vivo |
 
-**Las cifras calibradas, con su porqué, están en la cabecera de aquel `pallet.yaml`.** No
-se ajustan a ojo:
+Las calibraciones están en las cabeceras de `configs/scene.yaml` y
+`configs/pallet.yaml`, con la medida al lado:
 
-- `cartesian_speed` **0.0625** — un cuarto de la nominal. Por encima la caja se escurre de
-  la pinza y llega 15-20 mm desplazada. No es el peso (probado de 0.03 a 0.13 kg, mismo
-  deslizamiento): es la aceleración del tramo.
-- **23 mm entre cajas vecinas en el eje de cierre** — los impone el dedo, no la caja:
-  10.5 mm de grueso más lo que se abre al soltar. Es también el techo de ocupación del
-  palé (72-76 %) y el argumento más claro para pasarse a ventosa.
-- `drop_clearance` **8 mm** — el fondo de la curva medida: 20 mm → 5.1 mm de error,
-  8 mm → 1.9 mm, 2 mm → 3.9 mm.
-- **La pinza no se abre del todo para soltar**, solo 3 mm por lado; se abre entera ya en
-  alto y lejos del montón.
-
-> **Todas son del gripper del Panda.** En cuanto se decida el robot —y está sin decidir—
-> hay que **volver a medirlas**, no copiarlas. La tabla de medida está en aquella
-> cabecera: se repite, no se estima. Lo mismo con el barrido de alcance del IK.
+- `reach_tolerance`: 20 mm, por encima del suelo medido del servo.
+- `cup_gap`: 1,5 mm entre almohadilla y cartón al sellar.
+- `clearance`: 40 mm entre cajas de una capa; con 20 mm había roces.
+- `drop_clearance`: 2 mm; la ventosa no necesita abrir dedos.
+- generador: 18–55 × 16–40 × 8–30 cm, 90–280 kg/m³ y masa máxima 8,5 kg.
+- bahía alcanzable: 0,74 × 0,88 m en `scene.yaml`; el barrido documentado dio 0 de 720
+  poses fuera de alcance. Si cambian robot, herramienta o bahía, se repite el barrido.
 
 ## 8. Qué NO hacer
 
@@ -325,14 +346,20 @@ se ajustan a ojo:
    simulación.
 2. **La medida, sola:** `python -m src.measure`. Sus asserts cubren el CoG con cajas
    fuera de tolerancia y el margen contra el polígono de soporte.
-3. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry`. Un episodio
+3. **La celda:** `python tests/test_cell.py`. Compila las tres fuentes, comprueba las
+   cámaras, la banda, el orden del camión, la envolvente de IK y el pesaje de muñeca.
+4. **Con visor:** `python scripts/palletize.py --viewer --source table`.
+5. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry --level 21`. Un episodio
    entero a disco; mira el `episodes.jsonl`.
-4. **Con telemetría, y que diga en qué modo va.** Si no imprime que está activa, no lo
+6. **Con telemetría, y que diga en qué modo va.** Si no imprime que está activa, no lo
    está.
-5. **Con `/` abierto en el navegador.** Es la prueba de verdad: el episodio aparece **en
+7. **Con `/` abierto en el navegador.** Es la prueba de verdad: el episodio aparece **en
    curso** a los pocos segundos, el palé se monta paquete a paquete, los KPIs se mueven
    solos y al acabar pasa a terminado con su éxito o su causa de fallo.
-6. **Contra la base**, después:
+8. **El demostrador:** `cd tools && uv run pytest`.
+9. **El panel:** un nivel de mesa, cinta y camión en EJECUCIÓN y DEPURACIÓN; el modo
+   debe estar visible y DEPURACIÓN debe avisar que no publica.
+10. **Contra la base**, después:
 
 ```sql
 -- una fila de traza por paquete intentado
