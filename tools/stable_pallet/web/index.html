@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stable Pallet · panel de control</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-start" viewBox="0 0 24 24"><path d="M7 5v14M19 5 9 12l10 7z"/></symbol>
+  <symbol id="i-rewind" viewBox="0 0 24 24"><path d="M12 5 3 12l9 7zM21 5l-9 7 9 7z"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 5 7 12l8 7z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 5l8 7-8 7z"/></symbol>
+  <symbol id="i-forward" viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM12 5l9 7-9 7z"/></symbol>
+  <symbol id="i-end" viewBox="0 0 24 24"><path d="M17 5v14M5 5l10 7L5 19z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M4 22h24v4H4zM7 14h8v7H7zM17 14h8v7h-8zM11 6h10v7H11z"/>
+    </svg>
+    <div class="brand-text">
+      <h1>Stable Pallet</h1>
+      <p>Paletizado en lazo cerrado · UR10e · MuJoCo</p>
+    </div>
+  </div>
+  <div class="live">
+    <span class="status" id="status">Listo</span>
+    <span class="link" id="link" title="Conexión con el servidor"></span>
+  </div>
+</header>
+
+<main>
+
+  <section class="panel span-experiments">
+    <header class="panel-head">
+      <h2>Experimento</h2>
+      <span class="counter" id="experiment-count"></span>
+    </header>
+    <div class="cards" id="experiments"></div>
+  </section>
+
+  <div class="column">
+   <div class="settings">
+
+    <section class="panel">
+      <header class="panel-head"><h2>Velocidad</h2></header>
+      <div class="segmented" id="speeds"></div>
+      <p class="hint">El mismo movimiento, más rápido o más lento contra el reloj.</p>
+      <label class="switch" id="ff-row">
+        <input type="checkbox" id="fast-forward">
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b>Fast-forward</b>
+          <small>El brazo salta de pose a pose. La suelta, el asentamiento y las
+          sacudidas se simulan igual.</small>
+        </span>
+      </label>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head"><h2>Centros de masa</h2></header>
+      <label class="switch">
+        <input type="checkbox" id="show-true" checked>
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b><i class="chip chip-true"></i>Reales</b>
+          <small>Los que integra MuJoCo.</small>
+        </span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="show-estimated" checked>
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b><i class="chip chip-est"></i>Calculados</b>
+          <small>Los que usa el robot. La línea amarilla es el error.</small>
+        </span>
+      </label>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head"><h2>Arranque</h2></header>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="viewer" checked><span>Abrir la ventana 3D</span></label>
+        <label class="check"><input type="checkbox" id="measure-com" checked><span>Pesar cada caja en la muñeca</span></label>
+        <label class="check"><input type="checkbox" id="simplified"><span>Gráficos simplificados</span></label>
+        <label class="check"><input type="checkbox" id="hold" checked><span>Dejar el visor abierto al acabar</span></label>
+      </div>
+      <div class="seed">
+        <label for="seed">Semilla</label>
+        <input type="number" id="seed" placeholder="la del experimento">
+      </div>
+    </section>
+
+   </div>
+
+    <div class="actions">
+      <button class="btn btn-run" id="run">
+        <svg><use href="#i-play"/></svg><span>Ejecutar</span>
+      </button>
+      <button class="btn btn-stop" id="stop" disabled>
+        <svg><use href="#i-stop"/></svg><span>Detener</span>
+      </button>
+    </div>
+
+  </div>
+
+  <section class="panel span-transport" id="transport">
+    <header class="panel-head">
+      <h2>Reproducción</h2>
+      <span class="counter" id="frame-readout">sin grabación</span>
+    </header>
+
+    <div class="timeline">
+      <input type="range" id="scrub" min="0" max="0" value="0" disabled>
+      <div class="ticks"><span id="tick-start">0,0 s</span><span id="tick-end">0,0 s</span></div>
+    </div>
+
+    <div class="transport-row">
+      <button class="tbtn" data-act="start" title="Ir al principio"><svg><use href="#i-start"/></svg></button>
+      <button class="tbtn" data-act="backward" title="Reproducir hacia atrás"><svg><use href="#i-rewind"/></svg></button>
+      <button class="tbtn" data-act="prev" title="Un fotograma atrás"><svg><use href="#i-prev"/></svg></button>
+      <button class="tbtn tbtn-wide" id="pause" title="Pausar la ejecución"><svg><use href="#i-pause"/></svg><span>Pausa</span></button>
+      <button class="tbtn" data-act="next" title="Un fotograma adelante"><svg><use href="#i-next"/></svg></button>
+      <button class="tbtn" data-act="forward" title="Reproducir hacia delante"><svg><use href="#i-forward"/></svg></button>
+      <button class="tbtn" data-act="end" title="Ir al final"><svg><use href="#i-end"/></svg></button>
+    </div>
+
+    <p class="hint">Rebobinar revisa lo grabado: la ejecución espera donde estaba y sigue
+    desde ahí al reanudar.</p>
+  </section>
+
+  <section class="panel span-log">
+    <header class="panel-head">
+      <h2>Registro</h2>
+      <span class="counter" id="run-title"></span>
+    </header>
+    <div class="log" id="log"><p class="empty">Elige un experimento y pulsa Ejecutar.</p></div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
