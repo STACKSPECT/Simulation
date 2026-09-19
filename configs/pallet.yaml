@@ -1,126 +1,274 @@
-# La tarea: el palé, el catálogo de paquetes y los pesos de la heurística. SI.
+# La tarea: el palé, el catálogo de paquetes, los niveles y los pesos. SI.
 #
-# AQUÍ NO HAY GUION. En el repo predecesor este fichero llevaba un `script` con el hueco
-# de cada caja escrito; eso lo decide ahora `src/planner/heuristic.py`. Lo que queda aquí
-# es lo que describe la celda y lo que parametriza la decisión, no la decisión.
+# AQUÍ NO HAY GUION. Este fichero describe la celda y parametriza la decisión; dónde va
+# cada caja lo decide el planificador.
 #
 # ── OJO CON LAS UNIDADES DE TAMAÑO ────────────────────────────────────────────
 # `dims` = dimensiones COMPLETAS. `size` = SEMIEJES, que es lo que quiere MuJoCo. Son
 # claves distintas a propósito: un factor 2 escondido en un YAML no lo caza nadie.
 # `src/cell/scene.py` divide entre dos en un único sitio, al construir los geoms.
 #
-# ── LO QUE HAY QUE PORTAR, Y VOLVER A MEDIR ───────────────────────────────────
-# La cabecera del `configs/pallet.yaml` de `~/HackSpain/paletizado-guionizado` es un
-# cuaderno de laboratorio: lleva la derivación de la holgura entre cajas, la tabla de
-# deslizamiento contra velocidad, el barrido de `drop_clearance` y las medias RGB de las
-# dos cámaras. Cópiala entera con sus valores.
+# ── LAS CIFRAS CALIBRADAS, Y CÓMO SE MIDIERON ─────────────────────────────────
+# Todas son del UR10e con el OnRobot VGP20. Si cambia el robot o la herramienta, se
+# REPITEN; no se copian.
 #
-# PERO todas esas cifras son del gripper del Panda. En cuanto se decida el robot hay que
-# REPETIR las medidas, no copiarlas. Las cuatro que importan:
+#   reach_tolerance 20 mm   (scene.yaml) La caída estacionaria que la corrección
+#       cartesiana no quita es de unos pocos milímetros: un servo de posición aguanta
+#       contra la gravedad con error permanente de varios miliradianes, y un cartón
+#       sobre las ventosas lo empuja más allá de quince. Una pose que el brazo NO puede
+#       sostener falla por centenares de mm. 20 mm separa las dos cosas. Por debajo de
+#       ~8 mm todo acaba declarado `ik_unreachable`; por encima de ~40 mm se sella sobre
+#       una caja a la que la herramienta nunca llegó y se la coge por una esquina.
 #
-#   cartesian_speed 0.0625   un cuarto de la nominal; por encima la caja se escurre de
-#                            la pinza y llega 15-20 mm desplazada. No es el peso
-#                            (probado de 0.03 a 0.13 kg): es la aceleración del tramo.
-#   holgura 23 mm            en el eje de CIERRE de la pinza. La impone el dedo (10.5 mm
-#                            de grueso) más lo que se abre al soltar, no la caja.
-#   drop_clearance 8 mm      fondo de la curva medida: 20 mm -> 5.1 mm de error,
-#                            8 mm -> 1.9 mm, 2 mm -> 3.9 mm.
-#   release_margin 3 mm      la pinza no se abre del todo para soltar; se abre entera ya
-#                            en alto y lejos del montón.
+#   cup_gap 1,5 mm          (scene.yaml) Hueco entre la cara de la ventosa y la tapa al
+#       sellar. Por debajo, el contacto empuja el cartón antes de que haya vacío y la
+#       caja sale desplazada; por encima de ~4 mm el sello no agarra.
+#
+#   holgura 40 mm           (`clearance`, abajo) Entre cajas de la misma capa. Aquí NO
+#       la impone el dedo —no hay dedos— sino el error de seguimiento del descenso más
+#       la basculación del cartón colgado de las ventosas. Con 20 mm hay roces en el
+#       descenso; con 40 mm no los hay en ninguna de las 168 pruebas ni en el benchmark
+#       de 20 órdenes. Es la ventaja más clara de la ventosa sobre la pinza: con pinza
+#       paralela la holgura la fijaba el grueso del dedo y el techo de ocupación se
+#       quedaba en 72-76 %.
+#
+#   drop_clearance 2 mm     (scene.yaml) Se suelta prácticamente en contacto. Con
+#       ventosa no hay que abrir nada y el cartón no se escurre al soltar, así que la
+#       curva de error contra altura de suelta no tiene fondo: cuanto más bajo, mejor.
+#       2 mm es lo que hace falta para no empujar el montón al llegar.
+#
+#   masa máxima 8,5 kg      Carga útil nominal del UR10e (12,5 kg) menos los 2,55 kg del
+#       VGP20, dejando 1,45 kg de margen.
+#
+#   bahía 0,74 × 0,88 m     Ver la cabecera de `truck` en `scene.yaml`: recortada con IK
+#       sobre 60 cargas aleatorias, 0 de 720 poses de agarre fuera de alcance.
 
 pallet:
-  center:                        # [x, y] sobre la mesa de scene.yaml
-  dims:                          # [x, y] COMPLETAS. Va a runs.config.pallet_size_m
-  deck_thickness:                # la cubierta sobre la que se apila
-  rgba:
-  # Si trabajas con una maqueta, publica el factor: la interfaz dibuja a escala real y
-  # sin esto supone un europeo de 1200x800.
-  scale:
+  center: [0.60, 0.00]           # [x, y] en el mundo
+  dims: [1.20, 0.80]             # [x, y] COMPLETAS. Va a runs.config.pallet_size_m
+  deck_thickness: 0.144          # z de la cara superior: sobre ella se apila
+  max_height: 1.35               # por encima, el hueco no es candidato
+  max_mass: 350.0
+  rgba: [0.62, 0.39, 0.18, 1]
+  # Europalé real, no maqueta: la interfaz dibuja a escala 1.
+  scale: 1.0
+  clearance: 0.040               # holgura entre cajas de la misma capa. Ver cabecera.
 
 # Catálogo de paquetes. `dims` COMPLETAS.
 #
-# `cog_offset` es lo nuevo: el centro de gravedad deja de estar en el centro geométrico.
-# Es la verdad de la simulación —lo que `src/cell/scene.py` monta en el modelo—, NO lo
-# que el sistema sabe: `src/vision/gauge.py` tiene que estimarlo midiendo. Un gauge que
-# lea este valor es un oráculo con otro nombre.
-packages:
-  # ejemplo:
-  # grande:
-  #   dims: [0.100, 0.056, 0.045]
-  #   mass: 0.101
-  #   cog_offset: [0.0, 0.0, 0.0]   # [dx, dy, dz] desde el centro geométrico
-  #   friction: [1.1, 0.005, 0.0001]
-  #   rgba: [0.78, 0.42, 0.22, 1]
-
-# Qué paquetes entrega la cinta y en qué orden. Lo genera la semilla del episodio: el
-# sistema no sabe lo que viene, que es precisamente el problema que resuelve.
-supply:
-  n_packages:
-  types:                         # de qué tipos se sortea
-  seed_controls: [order, yaw]    # qué varía con la semilla
-
-# Los pesos del score. Suman 1.0 y son adimensionales.
+# `cog_offset` es la VERDAD de la simulación —lo que `src/cell/scene.py` monta en el
+# modelo— y NO lo que el sistema sabe: `src/vision/gauge.py` tiene que estimarlo
+# midiendo. Un gauge que lea este valor es un oráculo con otro nombre.
 #
-# Están aquí y no en `heuristic.py` porque se van a tocar mucho y cada cambio tiene que
-# poder explicarse. Cuando ajustes uno, deja escrito al lado contra qué lo mediste: un
-# peso sin su medida al lado es una opinión.
+# En MuJoCo se monta como un `<inertial>` explícito dentro del body, no como `pos` del
+# geom: así el cartón se ve centrado y sólo la inercia está descentrada, que es lo que
+# pasa de verdad cuando el contenido se asienta a un lado.
+packages:
+  book_s:
+    dims: [0.24, 0.18, 0.10]
+    mass: 1.2
+    cog_offset: [0.025, -0.010, 0.000]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.64, 0.43, 0.23, 1]
+  small:
+    dims: [0.30, 0.22, 0.12]
+    mass: 1.8
+    cog_offset: [0.025, 0.000, 0.000]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.72, 0.51, 0.29, 1]
+  shoe_m:
+    dims: [0.33, 0.24, 0.14]
+    mass: 2.4
+    cog_offset: [-0.035, 0.015, -0.010]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.58, 0.38, 0.20, 1]
+  std_s:
+    dims: [0.38, 0.28, 0.16]
+    mass: 3.5
+    cog_offset: [0.020, 0.020, -0.015]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.76, 0.57, 0.34, 1]
+  std_m:
+    dims: [0.42, 0.30, 0.18]
+    mass: 4.2
+    cog_offset: [0.050, 0.000, 0.010]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.64, 0.43, 0.23, 1]
+  apparel:
+    dims: [0.45, 0.32, 0.20]
+    mass: 5.4
+    cog_offset: [-0.030, -0.025, 0.000]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.72, 0.51, 0.29, 1]
+  std_l:
+    dims: [0.48, 0.34, 0.22]
+    mass: 6.2
+    cog_offset: [0.000, -0.040, -0.025]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.58, 0.38, 0.20, 1]
+  heavy_l:
+    dims: [0.55, 0.36, 0.26]
+    mass: 8.5
+    cog_offset: [-0.060, 0.035, -0.035]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.76, 0.57, 0.34, 1]
+
+# El sobre del que se sortea cuando un nivel pide `random`. La masa NO se sortea: es
+# densidad × volumen, que es lo que hace que un bulto grande y ligero y otro pequeño y
+# denso sean problemas distintos.
+generator:
+  length: [0.18, 0.55]
+  width: [0.16, 0.40]
+  height: [0.08, 0.30]
+  volume: [0.004, 0.050]         # 4-50 L
+  density: [90, 280]             # ropa ligera / relleno hasta libros densos
+  mass: [0.5, 8.5]               # 8,5 kg es el tope de caja del UR10e con el VGP20
+  max_aspect_ratio: 4.0          # lado mayor <= 4 x el menor
+  cog_fraction: 0.25             # |offset| <= 25 % de cada semieje
+  cog_sigma: 0.10
+  cog_z_bias: -0.04              # el contenido se asienta un poco por debajo del centro
+
+# ── LOS NUEVE NIVELES ─────────────────────────────────────────────────────────
+#
+# Tres tareas, tres niveles cada una. El `id` es lo que se sube a `episodes.level`, y la
+# DECENA es la tarea: 1x mesa, 2x cinta, 3x camión. Se codifica así porque la plataforma
+# tiene un solo entero por episodio y `task` es un vocabulario cerrado (todo esto es
+# `palletizing`): sin la decena, la interfaz compararía un nivel 2 de mesa contra un
+# nivel 2 de camión como si fueran lo mismo. `config.source` y `config.level_name` lo
+# dejan legible en la pantalla de ejecuciones.
+#
+# Añadir un nivel es añadir una fila. Cuatro ejes suben a la vez:
+#   catálogo   un tipo -> mezcla -> sorteado del generador
+#   pose       alineada -> girada -> girada y descentrada
+#   CoG        centrado -> el del catálogo -> adversarial (al límite del sobre)
+#   volumen    pocos bultos y una capa -> el palé lleno
+levels:
+  - {id: 11, source: table,    name: "mesa · N1 · un tipo, alineado",
+     n_packages: 4, types: [std_m],  yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: centred}
+  - {id: 12, source: table,    name: "mesa · N2 · mezcla, girado",
+     n_packages: 6, types: [book_s, small, shoe_m, std_s, std_m, apparel],
+     yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue}
+  - {id: 13, source: table,    name: "mesa · N3 · sorteado, CoG adversario",
+     n_packages: 8, types: [random], yaw_jitter_deg: 30, pos_jitter_m: 0.020, cog: adversarial}
+
+  - {id: 21, source: conveyor, name: "cinta · N1 · un tipo, centrado en la banda",
+     n_packages: 4, types: [std_m],  yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: centred}
+  - {id: 22, source: conveyor, name: "cinta · N2 · mezcla, llegada descentrada",
+     n_packages: 6, types: [book_s, small, shoe_m, std_s, std_m, apparel],
+     yaw_jitter_deg: 15, pos_jitter_m: 0.020, cog: catalogue}
+  - {id: 23, source: conveyor, name: "cinta · N3 · sorteado, separación variable",
+     n_packages: 8, types: [random], yaw_jitter_deg: 30, pos_jitter_m: 0.035, cog: adversarial}
+
+  - {id: 31, source: truck,    name: "camión · N1 · columnas ordenadas",
+     n_packages: 5, types: [small, shoe_m, std_s, std_m, std_l],
+     yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: catalogue}
+  - {id: 32, source: truck,    name: "camión · N2 · con el desorden del cargador",
+     n_packages: 6, types: [book_s, small, shoe_m, std_s, std_m, apparel],
+     yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: catalogue, loader_jitter: true}
+  - {id: 33, source: truck,    name: "camión · N3 · sorteado, CoG adversario",
+     n_packages: 8, types: [random], yaw_jitter_deg: 0, pos_jitter_m: 0.000,
+     cog: adversarial, loader_jitter: true}
+
+# Los pesos del score de `src/planner/heuristic.py`. Suman 1.0 y son adimensionales.
+#
+# Están aquí y no en el código porque se van a tocar mucho y cada cambio tiene que poder
+# explicarse. Los valores de partida salen de normalizar los del planificador de abajo,
+# que sí están medidos; cuando se ajuste uno, va su medida al lado.
 heuristic:
-  cell_size:                     # lado de celda del mapa de alturas, en metros
+  cell_size: 0.040               # lado de celda del mapa de alturas, en metros.
+                                 # Punto de partida = un cuarto del lado menor del
+                                 # paquete más pequeño que puede salir (0,16 m).
+                                 # SIN BARRER todavía: cuando se mida, la tabla va aquí.
+  min_support: 0.60              # por debajo, el hueco no es candidato
   weights:
-    support:                     # fracción de huella sobre algo sólido
-    flatness:                    # diferencia de altura bajo la huella
-    overhang:                    # cuánto sobresale del palé
-    compactness:                 # hueco desperdiciado alrededor
-    package_cog:                 # cuánto descentra el paquete su propio apoyo
-    pallet_cog:                  # a dónde deja el CoG del montón
-  min_support:                   # por debajo de esto el hueco no es candidato
+    support: 0.32                # fracción de huella sobre algo sólido
+    package_cog: 0.22            # cuánto descentra el paquete su propio apoyo
+    pallet_cog: 0.20             # a dónde deja el CoG del montón
+    overhang: 0.10               # cuánto sobresale del palé
+    compactness: 0.09            # hueco desperdiciado alrededor
+    flatness: 0.07               # diferencia de altura bajo la huella
+
+# El planificador de `src/planner/naive.py::BeamPlanner`, que es el que corre hoy.
+#
+# Estos pesos SÍ están medidos: con la semilla 17 y 10 permutaciones del catálogo, el
+# beam search produce una pila estrictamente estable en el 100 % de los ensayos frente
+# al 50 % de un first-fit, y baja el descentramiento medio del CoM de 142 mm a 81 mm.
+# Normalizados a 1.0 desde 3.5 / 2.5 / 2.2 / 1.1 / 1.0 / 0.8 (suma 11.1).
+planner:
+  minimum_support_ratio: 0.62
+  minimum_tipping_margin: 0.008
+  beam_width: 20
+  lookahead: 3
+  candidates_per_node: 40
+  heightmap_resolution: [12, 10]
+  weights:
+    support: 0.3153
+    tipping_margin: 0.2252
+    centered_com: 0.1982
+    low_height: 0.0991
+    compactness: 0.0901
+    regular_surface: 0.0721
 
 # Las vistas que se suben a la plataforma. Se renderizan con el palé ya asentado.
 #
 # LOS NOMBRES SON UN VOCABULARIO CERRADO: top | side | iso | camera. Con otro nombre el
-# PNG sube a Storage y luego la base rechaza la fila con un 23514: la foto queda huérfana
-# y la traza sin imagen. Al repo anterior le pasó con `front`.
+# PNG sube a Storage y luego la base rechaza la fila con un 23514: la foto queda
+# huérfana y la traza sin imagen. Al repo anterior le pasó con `front`. Hay un test que
+# lo comprueba sin arrancar el simulador.
 cameras:
   top:
-    position:
-    lookat:
+    position: [0.60, 0.00, 2.40]
+    lookat: [0.60, 0.00, 0.144]
     up: [0, 1, 0]                # sin esto la cenital sale girada 90 grados respecto a
-                                 # como el front dibuja el palé (X derecha, Y arriba)
-    fovy:
-    resolution:
+                                 # como el alzado dibuja el palé (X derecha, Y arriba)
+    fovy: 45
+    resolution: [1280, 960]
   side:
-    position:
-    lookat:
-    fovy:
-    resolution:
+    position: [0.60, -2.30, 0.80]
+    lookat: [0.60, 0.00, 0.45]
+    fovy: 45
+    resolution: [1280, 720]
+  iso:
+    position: [3.05, -3.15, 2.45]
+    lookat: [0.60, 0.00, 0.45]
+    fovy: 45
+    resolution: [1280, 720]
+  # La que alimentaría a la percepción: mira a la estación de recogida, no al palé.
+  # Sirve para las tres fuentes porque la bahía del remolque y la estación de la cinta
+  # caen en el mismo sitio.
+  camera:
+    position: [-0.20, -1.85, 1.55]
+    lookat: [-0.20, -0.76, 0.60]
+    fovy: 50
+    resolution: [640, 480]
 
-# Movimiento. Estos valores PISAN los de `scene.yaml` solo para esta escena. Portar con
-# su cabecera medida (ver arriba).
+# Movimiento. Estos valores PISAN los de `scene.yaml` solo para esta escena.
 motion:
-  cartesian_speed:
-  transit_height:                # todo el trayecto va en cartesiano a esta cota
-  drop_clearance:
-  park_xy:                       # dónde aparca el brazo para la foto, fuera del encuadre
-  release_margin:
+  park_xy: [1.15, -1.02]         # dónde aparta el brazo para la foto, fuera del encuadre
+                                 # cenital y despejado del remolque (x > 0.12)
+  park_z: 1.05
+  release_settle_s: 0.15         # con ventosa no hay que abrir nada: se corta el vacío
+                                 # y se espera a que la caja apoye antes de subir
 
-# Iluminación de ESTA escena. Portar con sus medias RGB medidas: la cenital ve caras
-# horizontales y satura, el alzado ve verticales y sale a oscuras. El `fill` diagonal es
-# lo que arregla el segundo sin romper el primero.
+# Iluminación de ESTA escena.
 lighting:
-  headlight_diffuse:
-  headlight_ambient:
-  spot_diffuse:
-  overhead_diffuse:
+  headlight_diffuse: 0.75
+  headlight_ambient: 0.45
+  headlight_specular: 0.20
+  overhead_diffuse: [0.55, 0.55, 0.55]
+  overhead_pos: [0.60, -0.40, 4.00]
+  spot_diffuse: [0.35, 0.35, 0.35]
+  spot_pos: [-0.20, -0.66, 2.20]
+  # El diagonal: la cenital ve caras horizontales y satura, el alzado ve verticales y
+  # sale a oscuras. Este relleno arregla el segundo sin romper el primero.
   fill:
-    direction:
-    diffuse:
+    direction: [-0.60, 0.50, -0.62]
+    diffuse: [0.30, 0.30, 0.32]
 
 episode:
-  # Nivel, tal y como lo entiende la plataforma: sirve para que la interfaz no compare
-  # un palé de 2 capas con uno de 4.
-  level:
-  max_duration_s:                # tiempo SIMULADO máximo -> `timeout`
-  tolerance_xy:                  # por encima del suelo medido del servo, no por debajo
-  tolerance_yaw:
-  settle_steps:                  # física tras soltar, ANTES de medir
-  max_overhang:                  # por encima -> `overhang_violation`
+  level: 11                      # el que corre si no se pide otro
+  max_duration_s: 600            # tiempo SIMULADO máximo -> `timeout`
+  tolerance_xy: 0.020            # por encima del suelo medido del servo, no por debajo
+  tolerance_yaw: 0.10            # rad (~5.7 grados)
+  max_overhang: 0.020            # por encima -> `overhang_violation`
+  snapshot_views: [top, side]    # una foto por capa; `iso` y `camera` a demanda
