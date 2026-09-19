@@ -4,6 +4,12 @@ Contexto permanente de este repositorio. Léelo entero antes de escribir código
 aquí contradice lo que crees saber, gana este documento; si algo está desactualizado,
 corrígelo en el mismo PR.
 
+La documentación de cara afuera está en inglés y en otros dos ficheros: `README.md`
+—estado fichero a fichero, dependencias con sus licencias y decisiones abiertas— y
+`CONTRIBUTING.md` —ramas, convención de commits y la escalera de comprobación de §9—.
+Este documento sigue siendo el que manda sobre el contenido; aquéllos no lo repiten, lo
+apuntan. El proyecto es MIT (ver `LICENSE`).
+
 ---
 
 ## 1. Qué es esto
