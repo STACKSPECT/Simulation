@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import signal
 import subprocess
 import threading
 import webbrowser
@@ -85,26 +86,59 @@ def _catalogue() -> list[dict[str, Any]]:
     ]
 
 
+def unwind_child(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
+    """Pide al hijo que deshaga. ``terminate()`` (SIGTERM) no recorre ``finally``.
+
+    En POSIX, SIGINT se convierte en ``KeyboardInterrupt`` y sí cierra el episodio.
+    SIGTERM y kill quedan como respaldo si el proceso no sale.
+    """
+    if process.poll() is not None:
+        return
+    sigint = getattr(signal, "SIGINT", None)
+    if sigint is not None:
+        try:
+            process.send_signal(sigint)
+        except (ProcessLookupError, OSError, ValueError):
+            return
+        try:
+            process.wait(timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
 class PalletizeClient:
     """El entrypoint real, visto con el mismo protocolo de líneas que el runner local."""
 
-    def __init__(self, request: dict[str, Any], on_message: Any) -> None:
-        python = REPO / ".venv" / "bin" / "python"
-        argv = [
-            interpreter(bool(request.get("viewer")), python if python.exists() else None),
-            str(REPO / "scripts" / "palletize.py"),
-            "--protocol", "json",
-            "--source", str(request["source"]),
-            "--level", str(request["level"]),
-            "-n", "1",
-        ]
-        if request.get("viewer"):
-            argv.append("--viewer")
-        if request.get("simplified_graphics"):
-            argv.append("--simplified-graphics")
-        argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
-        if request.get("seed") is not None:
-            argv.extend(("--seed", str(int(request["seed"]))))
+    def __init__(
+        self,
+        request: dict[str, Any],
+        on_message: Any,
+        *,
+        argv: list[str] | None = None,
+    ) -> None:
+        if argv is None:
+            python = REPO / ".venv" / "bin" / "python"
+            argv = [
+                interpreter(bool(request.get("viewer")), python if python.exists() else None),
+                str(REPO / "scripts" / "palletize.py"),
+                "--protocol", "json",
+                "--source", str(request["source"]),
+                "--level", str(request["level"]),
+                "-n", "1",
+            ]
+            if request.get("viewer"):
+                argv.append("--viewer")
+            if request.get("simplified_graphics"):
+                argv.append("--simplified-graphics")
+            argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
+            if request.get("seed") is not None:
+                argv.extend(("--seed", str(int(request["seed"]))))
         self.on_message = on_message
         self.process = subprocess.Popen(
             argv, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -137,12 +171,8 @@ class PalletizeClient:
             self.stop()
 
     def stop(self, timeout: float = 5.0) -> None:
-        if self.is_running():
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+        """SIGINT para que el CLI cierre el episodio; SIGTERM y kill si no sale."""
+        unwind_child(self.process, timeout)
 
 
 class Session:

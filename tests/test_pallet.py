@@ -14,7 +14,12 @@ import numpy as np  # noqa: E402
 from theker_telemetry import FAILURES  # noqa: E402
 
 from placing import METRIC_NAMES  # noqa: E402
-from scripts.palletize import oracle_for  # noqa: E402
+from scripts.palletize import (  # noqa: E402
+    _aborted,
+    _request_unwind,
+    install_termination_unwind,
+    oracle_for,
+)
 from src import measure  # noqa: E402
 from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
 from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
@@ -375,6 +380,75 @@ def test_depth_fuses_into_the_height_map() -> None:
 def test_oracle_is_any_stub_for_every_combination() -> None:
     for flags in itertools.product((False, True), repeat=4):
         assert oracle_for(*flags) is any(flags)
+
+
+def test_an_aborted_episode_is_unsuccessful_without_inventing_a_failure() -> None:
+    scene = SimpleNamespace(
+        level=SimpleNamespace(id=11), boxes=[object()], clock=1.25, oracle=False,
+    )
+    result = _aborted(7, scene)
+    assert result.success is False
+    assert result.failure is None
+    assert result.metrics["aborted"] is True
+    assert result.task == "palletizing"
+
+
+def test_sigterm_unwinds_like_ctrl_c() -> None:
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        install_termination_unwind()
+        assert signal.getsignal(signal.SIGTERM) is _request_unwind
+        try:
+            _request_unwind(signal.SIGTERM, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("SIGTERM tiene que deshacer como Ctrl-C")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_sigterm_runs_the_finally_that_closes_an_episode() -> None:
+    """El default de SIGTERM mata sin finally; el CLI no puede permitírselo."""
+    import signal
+    import subprocess
+    import tempfile
+    import textwrap
+
+    marker = Path(tempfile.mkdtemp()) / "cleaned"
+    child = textwrap.dedent(f"""\
+        import sys, time
+        from pathlib import Path
+        sys.path.insert(0, {str(REPO)!r})
+        from scripts.palletize import install_termination_unwind
+        install_termination_unwind()
+        try:
+            print("ready", flush=True)
+            time.sleep(30)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            Path(sys.argv[1]).write_text("ok")
+    """)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child, str(marker)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline().strip()
+        if line != "ready":
+            err = proc.stderr.read() if proc.stderr else ""
+            raise AssertionError(f"el hijo no arrancó: {line!r}\n{err}")
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=8) != -signal.SIGTERM
+        assert marker.read_text() == "ok"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
 
 
 def test_planners_keep_their_contract() -> None:

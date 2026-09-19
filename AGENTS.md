@@ -139,10 +139,12 @@ nada, y al arrancar se imprime en qué modo corre. El SDK trata "sin credenciale
 modo normal, así que un `.env` mal puesto se traga la subida en silencio: se corría, se
 miraba la interfaz, no había nada y no había forma de saber por qué.
 
-**Un episodio abierto se cierra SIEMPRE.** Un Ctrl-C, cerrar el visor o un proceso muerto
-dejan la fila en `running` para siempre, y la pantalla Live elige el primer episodio en
-ese estado **sin ordenar**: un solo huérfano la deja clavada ahí indefinidamente. El
-bucle va en `try/finally` y en el `finally` se cierra con `success=False, failure=None`.
+**Un episodio abierto se cierra SIEMPRE.** Un Ctrl-C, parar desde el panel, cerrar el
+visor o un proceso muerto dejan la fila en `running` para siempre, y la pantalla Live
+elige el primer episodio en ese estado **sin ordenar**: un solo huérfano la deja clavada
+ahí indefinidamente. El bucle va en `try/finally` y en el `finally` se cierra con
+`success=False, failure=None`. `SIGTERM` no recorre ese `finally`: el panel pide `SIGINT`
+y el CLI trata `SIGTERM` como Ctrl-C.
 
 **El disco manda.** El `episodes.jsonl` de `runs/` es la fuente de verdad y Supabase una
 réplica. Un fallo de red avisa una vez, apaga la subida y el episodio sigue. **No

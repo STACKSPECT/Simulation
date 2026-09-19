@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -152,6 +153,16 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
             scene.viewer = None
 
 
+def _request_unwind(_signum: int, _frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def install_termination_unwind() -> None:
+    """SIGTERM (p. ej. ``Popen.terminate``) tiene que deshacer igual que Ctrl-C."""
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _request_unwind)
+
+
 def _aborted(seed: int, scene) -> EpisodeResult:
     return EpisodeResult(
         seed=seed,
@@ -229,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     seed = args.seed
     scene = first_scene
     lines: list[str] = []
+    install_termination_unwind()
     try:
         for index in range(args.episodes):
             seed = args.seed + index
