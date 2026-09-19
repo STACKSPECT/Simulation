@@ -1,0 +1,126 @@
+# La tarea: el palé, el catálogo de paquetes y los pesos de la heurística. SI.
+#
+# AQUÍ NO HAY GUION. En el repo predecesor este fichero llevaba un `script` con el hueco
+# de cada caja escrito; eso lo decide ahora `src/planner/heuristic.py`. Lo que queda aquí
+# es lo que describe la celda y lo que parametriza la decisión, no la decisión.
+#
+# ── OJO CON LAS UNIDADES DE TAMAÑO ────────────────────────────────────────────
+# `dims` = dimensiones COMPLETAS. `size` = SEMIEJES, que es lo que quiere MuJoCo. Son
+# claves distintas a propósito: un factor 2 escondido en un YAML no lo caza nadie.
+# `src/cell/scene.py` divide entre dos en un único sitio, al construir los geoms.
+#
+# ── LO QUE HAY QUE PORTAR, Y VOLVER A MEDIR ───────────────────────────────────
+# La cabecera del `configs/pallet.yaml` de `~/HackSpain/paletizado-guionizado` es un
+# cuaderno de laboratorio: lleva la derivación de la holgura entre cajas, la tabla de
+# deslizamiento contra velocidad, el barrido de `drop_clearance` y las medias RGB de las
+# dos cámaras. Cópiala entera con sus valores.
+#
+# PERO todas esas cifras son del gripper del Panda. En cuanto se decida el robot hay que
+# REPETIR las medidas, no copiarlas. Las cuatro que importan:
+#
+#   cartesian_speed 0.0625   un cuarto de la nominal; por encima la caja se escurre de
+#                            la pinza y llega 15-20 mm desplazada. No es el peso
+#                            (probado de 0.03 a 0.13 kg): es la aceleración del tramo.
+#   holgura 23 mm            en el eje de CIERRE de la pinza. La impone el dedo (10.5 mm
+#                            de grueso) más lo que se abre al soltar, no la caja.
+#   drop_clearance 8 mm      fondo de la curva medida: 20 mm -> 5.1 mm de error,
+#                            8 mm -> 1.9 mm, 2 mm -> 3.9 mm.
+#   release_margin 3 mm      la pinza no se abre del todo para soltar; se abre entera ya
+#                            en alto y lejos del montón.
+
+pallet:
+  center:                        # [x, y] sobre la mesa de scene.yaml
+  dims:                          # [x, y] COMPLETAS. Va a runs.config.pallet_size_m
+  deck_thickness:                # la cubierta sobre la que se apila
+  rgba:
+  # Si trabajas con una maqueta, publica el factor: la interfaz dibuja a escala real y
+  # sin esto supone un europeo de 1200x800.
+  scale:
+
+# Catálogo de paquetes. `dims` COMPLETAS.
+#
+# `cog_offset` es lo nuevo: el centro de gravedad deja de estar en el centro geométrico.
+# Es la verdad de la simulación —lo que `src/cell/scene.py` monta en el modelo—, NO lo
+# que el sistema sabe: `src/vision/gauge.py` tiene que estimarlo midiendo. Un gauge que
+# lea este valor es un oráculo con otro nombre.
+packages:
+  # ejemplo:
+  # grande:
+  #   dims: [0.100, 0.056, 0.045]
+  #   mass: 0.101
+  #   cog_offset: [0.0, 0.0, 0.0]   # [dx, dy, dz] desde el centro geométrico
+  #   friction: [1.1, 0.005, 0.0001]
+  #   rgba: [0.78, 0.42, 0.22, 1]
+
+# Qué paquetes entrega la cinta y en qué orden. Lo genera la semilla del episodio: el
+# sistema no sabe lo que viene, que es precisamente el problema que resuelve.
+supply:
+  n_packages:
+  types:                         # de qué tipos se sortea
+  seed_controls: [order, yaw]    # qué varía con la semilla
+
+# Los pesos del score. Suman 1.0 y son adimensionales.
+#
+# Están aquí y no en `heuristic.py` porque se van a tocar mucho y cada cambio tiene que
+# poder explicarse. Cuando ajustes uno, deja escrito al lado contra qué lo mediste: un
+# peso sin su medida al lado es una opinión.
+heuristic:
+  cell_size:                     # lado de celda del mapa de alturas, en metros
+  weights:
+    support:                     # fracción de huella sobre algo sólido
+    flatness:                    # diferencia de altura bajo la huella
+    overhang:                    # cuánto sobresale del palé
+    compactness:                 # hueco desperdiciado alrededor
+    package_cog:                 # cuánto descentra el paquete su propio apoyo
+    pallet_cog:                  # a dónde deja el CoG del montón
+  min_support:                   # por debajo de esto el hueco no es candidato
+
+# Las vistas que se suben a la plataforma. Se renderizan con el palé ya asentado.
+#
+# LOS NOMBRES SON UN VOCABULARIO CERRADO: top | side | iso | camera. Con otro nombre el
+# PNG sube a Storage y luego la base rechaza la fila con un 23514: la foto queda huérfana
+# y la traza sin imagen. Al repo anterior le pasó con `front`.
+cameras:
+  top:
+    position:
+    lookat:
+    up: [0, 1, 0]                # sin esto la cenital sale girada 90 grados respecto a
+                                 # como el front dibuja el palé (X derecha, Y arriba)
+    fovy:
+    resolution:
+  side:
+    position:
+    lookat:
+    fovy:
+    resolution:
+
+# Movimiento. Estos valores PISAN los de `scene.yaml` solo para esta escena. Portar con
+# su cabecera medida (ver arriba).
+motion:
+  cartesian_speed:
+  transit_height:                # todo el trayecto va en cartesiano a esta cota
+  drop_clearance:
+  park_xy:                       # dónde aparca el brazo para la foto, fuera del encuadre
+  release_margin:
+
+# Iluminación de ESTA escena. Portar con sus medias RGB medidas: la cenital ve caras
+# horizontales y satura, el alzado ve verticales y sale a oscuras. El `fill` diagonal es
+# lo que arregla el segundo sin romper el primero.
+lighting:
+  headlight_diffuse:
+  headlight_ambient:
+  spot_diffuse:
+  overhead_diffuse:
+  fill:
+    direction:
+    diffuse:
+
+episode:
+  # Nivel, tal y como lo entiende la plataforma: sirve para que la interfaz no compare
+  # un palé de 2 capas con uno de 4.
+  level:
+  max_duration_s:                # tiempo SIMULADO máximo -> `timeout`
+  tolerance_xy:                  # por encima del suelo medido del servo, no por debajo
+  tolerance_yaw:
+  settle_steps:                  # física tras soltar, ANTES de medir
+  max_overhang:                  # por encima -> `overhang_violation`

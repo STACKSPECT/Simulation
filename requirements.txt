@@ -1,0 +1,10 @@
+# Versiones pinchadas: mujoco y mink se rompen entre menores.
+# El SDK `theker_telemetry` NO va aquí — lo instala scripts/setup.sh editable desde el
+# repo Platform (rama dev), porque es el contrato de quien almacena el dato.
+mujoco==3.13.0
+mink==1.3.0
+qpsolvers
+daqp
+numpy
+imageio
+pyyaml
