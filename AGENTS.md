@@ -164,6 +164,15 @@ Y la asimetría que hay que tener clarísima:
 - **En `payload` (que es `jsonb`), sobrar es inocuo y faltar rompe.** Puedes añadir
   `score` al `plan` o `cog_offset_mm` al `pick` sin miedo. Pero si falta una de las
   claves de arriba, la interfaz **no enseña nada y no da error**.
+
+  Lo que esta celda manda hoy además del mínimo, y por qué: `perceive` lleva el estado de
+  la fuente (`source`, `pending`, `exhausted`, `jammed`) porque ninguna fuente tiene
+  evento propio (ver §6); `plan` lleva `score`, `breakdown` y `heightmap_top_mm`; `pick`
+  lleva `cog_offset_mm`, `active_cups` y `grip_capacity_ratio` —el agarre pierde margen
+  antes de resbalar, así que un `grasp_slip` se ve venir en el ratio—; y `place` lleva
+  `reach_residual_mm`, lo que el brazo NO llegó a corregir. Ese último distingue un
+  acierto limpio de un roce justo por debajo de `reach_tolerance`, que sin él acaban los
+  dos en `True`. Ninguno lo pinta la interfaz todavía: están guardados y consultables.
 - **En el nivel de la fila, sobrar es letal.** `event/placement/pallet_state/snapshot`
   son `**kwargs` puros y cada clave es una columna: un nombre mal escrito es un 400 que
   el SDK se traga, y a partir de ahí la subida queda apagada **para el resto de la

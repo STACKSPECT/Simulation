@@ -90,16 +90,21 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
             if arm.is_holding():
                 _return_to_source(arm, scene, box, observation)
             _prepare_failed_attempt(scene, box, observation, attempt)
-            _record(episode, scene, attempt, 0.0, sink, planner, verbose)
+            _record(episode, scene, arm, attempt, 0.0, sink, planner, verbose)
             break
 
         spec = gauge.measure(scene, arm, observation)
         scene.episode_specs[attempt] = spec
+        # `active_cups` y `grip_capacity_ratio` sobran para la interfaz de hoy, y eso es
+        # inocuo en un `payload`. Van porque un `grasp_slip` se ve venir en el ratio: la
+        # ventosa pierde margen antes de soltar la caja.
         _event(
             episode, scene, sink, "pick", box,
             mass_kg=round(spec.mass_kg, 4),
             type=spec.type_name,
             cog_offset_mm=[round(float(value) * 1000, 1) for value in spec.cog_offset_m],
+            active_cups=len(arm.grasp.cups) if arm.grasp else 0,
+            grip_capacity_ratio=round(arm.grasp.capacity_ratio, 2) if arm.grasp else 0.0,
         )
 
         heightmap = measured_heightmap(scene)
@@ -122,7 +127,7 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
             episode.failure = "wrong_placement"
             _return_to_source(arm, scene, box, observation)
             _prepare_failed_attempt(scene, box, observation, attempt, spec)
-            _record(episode, scene, attempt, 0.0, sink, planner, verbose)
+            _record(episode, scene, arm, attempt, 0.0, sink, planner, verbose)
             break
 
         scene.episode_plans[attempt] = plan
@@ -145,7 +150,7 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
         supply.release(scene)
         if failure:
             episode.failure = failure
-        _record(episode, scene, attempt, drift, sink, planner, verbose)
+        _record(episode, scene, arm, attempt, drift, sink, planner, verbose)
         if episode.failure:
             break
 
@@ -240,7 +245,7 @@ def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPla
     return None, drift
 
 
-def _record(episode: Episode, scene, index: int, drift: float,
+def _record(episode: Episode, scene, arm: ArmController, index: int, drift: float,
             sink: Sink | None, planner: Planner, verbose: bool) -> None:
     """Remide todas las cajas intentadas y emite una fila aunque haya fallo."""
     done: list[measure.Placement] = []
@@ -255,11 +260,15 @@ def _record(episode: Episode, scene, index: int, drift: float,
     episode.states.append(state)
     episode.drifts.append(drift)
     last = done[-1]
+    # `reach_residual_mm` es lo que el brazo NO llegó a corregir al soltar. El error de
+    # colocación dice dónde acabó la caja; esto dice si la maniobra iba justa de alcance,
+    # que es una causa de lo anterior y no se deduce de ella.
     _event(
         episode, scene, sink, "place", last.box,
         error_xy_mm=round(last.error_xy * 1000, 1),
         error_yaw_deg=round(float(np.degrees(last.error_yaw)), 1),
         overhang_mm=round(last.overhang * 1000, 1),
+        reach_residual_mm=round(arm.last_residual * 1000, 1),
     )
     _event(
         episode, scene, sink, "settle", last.box,
