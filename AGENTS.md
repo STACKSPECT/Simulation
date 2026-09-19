@@ -336,6 +336,10 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
   viven en ficheros aparte con el nombre puesto.
 - **No toques `configs/` a ojo.** Cada valor raro tiene su medida al lado; si cambias uno,
   deja escrito cómo lo mediste.
+- **No centres el TCP sobre un cartón estrecho y apliques el offset del bloque de
+  ventosas solo después de sellar.** El cartón viaja el desplazamiento entero al primer
+  waypoint: un `book_s` sale ~45 mm corrido. El agarre se planifica ANTES del descenso y
+  `move_to` cancela el offset desde el acercamiento. No se tapa subiendo `tolerance_xy`.
 - **No añadas dependencias** sin mirar antes si MuJoCo o numpy ya lo hacen.
 
 ## 9. Cómo se comprueba, en este orden

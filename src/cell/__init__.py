@@ -8,6 +8,7 @@ Lo que trae y se usa aquí sin cambios:
 
     TCP_SITE                       nombre del site que la IK usa como frame del TCP
     TOOL_DOWN                      la orientación de trabajo de la herramienta
+    grasp_offset_world(...)        offset del bloque de ventosas, en XY de mundo
     add_table(cfg)                 la mesa, a partir de configs/scene.yaml
     tcp_frame(position, yaw)       pose de agarre desde un punto y el giro de la caja
     lookat_quat(position, lookat)  cuaternión de una cámara que mira a un punto
@@ -72,6 +73,26 @@ def rotation_z(angle: float) -> np.ndarray:
     """Giro alrededor del eje Z del mundo, en radianes."""
     cosine, sine = np.cos(angle), np.sin(angle)
     return np.array([[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]])
+
+
+def grasp_offset_world(tool_offset, yaw: float,
+                       reference: np.ndarray | None = None) -> np.ndarray:
+    """Dónde queda el bloque de ventosas activo, en XY de mundo.
+
+    La rejilla vive en el frame de la herramienta, que apunta hacia abajo: `TOOL_DOWN`
+    tiene el eje Y contra el del mundo. Cancelar el offset en coordenadas de mundo lo
+    duplica en ese eje; hay que pasarlo antes por `reference[:2, :2]`. `ArmController`
+    resta este vector a cada destino de `move_to` desde el acercamiento de agarre, no
+    solo con el cartón ya sellado: si se aplica después, un `book_s` viaja ~45 mm.
+    """
+    frame = TOOL_DOWN if reference is None else reference
+    local = frame[:2, :2] @ np.asarray(tool_offset, dtype=float)
+    cosine, sine = float(np.cos(yaw)), float(np.sin(yaw))
+    return np.array([
+        local[0] * cosine - local[1] * sine,
+        local[0] * sine + local[1] * cosine,
+        0.0,
+    ])
 
 
 def tcp_frame(position, yaw: float) -> Pose:

@@ -6,6 +6,7 @@ Portado desde `tools/stable_pallet/simulator.py`. `ArmController` expone:
     tcp_pose()                 pose actual del TCP
     move_to(pose)              waypoint cartesiano; False si no converge -> ik_unreachable
     move_joints(qpos, dur)     espacio de juntas; SOLO para la foto final
+    prepare_grasp(grasp)       fija el bloque de ventosas ANTES de bajar a sellar
     seal(index)                sella las ventosas sobre una caja; False -> grasp_slip
     release()                  corta el vacío
     is_holding()               False si la caja se escurrió -> grasp_slip
@@ -35,10 +36,13 @@ montón al volver. `move_joints` existe sólo para la foto final, cuando ya no q
 que colocar.
 
 **El bloque de ventosas que agarra una caja estrecha está DESCENTRADO respecto al
-cuerpo**, y el brazo tiene que cancelar ese desplazamiento en cada movimiento mientras
-la lleve. La rejilla vive en el frame de la herramienta, que apunta hacia abajo, así que
-cancelarlo directamente en coordenadas de mundo lo DUPLICA en un eje en vez de quitarlo
-y la fila exterior de ventosas queda colgando por fuera del cartón. Ver `TOOL_DOWN`.
+cuerpo**, y el brazo tiene que cancelar ese desplazamiento en cada movimiento desde el
+acercamiento de agarre, no solo con el cartón ya en la mano. Si se centra el TCP, se
+sella y *después* se resta el offset, el cartón viaja el desplazamiento entero al
+primer waypoint: un `book_s` sale ~45 mm corrido. La rejilla vive en el frame de la
+herramienta, que apunta hacia abajo, así que cancelarlo directamente en coordenadas de
+mundo lo DUPLICA en un eje en vez de quitarlo y la fila exterior de ventosas queda
+colgando por fuera del cartón. Ver `TOOL_DOWN`.
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from src.cell import Pose, rotation_z, tcp_frame
+from src.cell import Pose, grasp_offset_world, tcp_frame
 from src.cell.scene import HeldPackage
 
 
@@ -308,23 +312,41 @@ class ArmController:
     def _held_offset_world(self, pose: Pose) -> np.ndarray:
         """Dónde queda el bloque de ventosas activo respecto al origen de la herramienta.
 
-        Devuelve cero mientras no haya nada agarrado. Con una caja en la mano es lo que
-        hay que restar al destino para que el CARTÓN acabe donde se pidió, y no la brida.
+        Cero si aún no hay un `grasp` elegido. Con uno fijado —antes de sellar, con el
+        cartón en la mano, da igual— es lo que hay que restar al destino para que el
+        CARTÓN acabe donde se pidió, y no la brida. Se elige en `_pick` antes de bajar:
+        aplicarlo solo después de `seal` desplaza el paquete el offset entero.
         """
         if self.grasp is None:
             return np.zeros(3)
-        local = self.reference[:2, :2] @ np.asarray(self.grasp.tool_offset, dtype=float)
-        yaw = pose.yaw
-        cosine, sine = math.cos(yaw), math.sin(yaw)
-        return np.array([
-            local[0] * cosine - local[1] * sine,
-            local[0] * sine + local[1] * cosine,
-            0.0,
-        ])
+        return grasp_offset_world(self.grasp.tool_offset, pose.yaw, self.reference)
+
+    def carton_xy(self) -> tuple[float, float]:
+        """XY del cartón que `move_to` está sirviendo, no de la brida.
+
+        Con un paquete agarrado es la pose real del cuerpo. Sin él, TCP más el offset
+        del bloque, que es lo que hay que usar para retirar en vertical tras soltar.
+        """
+        if self.held is not None:
+            position, _ = self.scene.box_pose(self.held)
+            return float(position[0]), float(position[1])
+        pose = self.tcp_pose()
+        world = pose.position + self._held_offset_world(pose)
+        return float(world[0]), float(world[1])
 
     def plan_grasp(self, box) -> Grasp:
         """Qué ventosas cubren esta caja y si el vacío llega para levantarla."""
         return self.vacuum.plan(box.dims_m, box.mass_kg)
+
+    def prepare_grasp(self, grasp: Grasp) -> None:
+        """Fija el bloque de ventosas que `move_to` pone sobre el centro del cartón.
+
+        Tiene que ocurrir ANTES del descenso de agarre. Si se sella con el cuerpo
+        centrado y el offset se aplica después, el cartón viaja el desplazamiento
+        entero al primer waypoint y un `book_s` sale ~45 mm corrido.
+        """
+        self.grasp = grasp
+        self.show_cups(grasp)
 
     def show_cups(self, grasp: Grasp) -> None:
         """Enciende en el visor las ventosas que están sellando. Sólo es color."""

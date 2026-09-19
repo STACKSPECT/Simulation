@@ -185,17 +185,25 @@ def _prepare_failed_attempt(scene, box, observation, attempt: int,
 
 
 def _pick(arm: ArmController, scene, box, observation) -> str | None:
-    """Recoge el paquete presentado y lo eleva hasta la cota de tránsito."""
+    """Recoge el paquete presentado y lo eleva hasta la cota de tránsito.
+
+    El bloque de ventosas se elige ANTES de bajar: `move_to` cancela su offset desde el
+    acercamiento, igual que al colocar. Centrar el TCP, sellar y aplicar el offset
+    después desplaza el cartón el hueco entero — ~45 mm en un `book_s`.
+    """
     motion = scene.cfg["motion"]
     top = np.asarray(observation.position, dtype=float).copy()
     top[2] += observation.dims_guess[2] / 2
     seal_z = float(top[2]) + arm.cup_gap
     safe_z = max(float(motion["transit_height"]), seal_z + float(motion["place_clearance"]))
+    grasp = arm.plan_grasp(box)
+    if not grasp.feasible:
+        return "grasp_slip"
+    arm.prepare_grasp(grasp)
     if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
         return "ik_unreachable"
     if not arm.go_to(top[0], top[1], seal_z, observation.yaw, approach=True):
         return "ik_unreachable"
-    grasp = arm.plan_grasp(box)
     if not arm.seal(box.index, grasp):
         return "grasp_slip"
     if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
@@ -213,7 +221,8 @@ def _return_to_source(arm: ArmController, scene, box, observation) -> None:
     arm.go_to(top[0], top[1], safe_z, observation.yaw)
     arm.go_to(top[0], top[1], float(top[2]) + arm.cup_gap, observation.yaw, approach=True)
     arm.release()
-    arm.go_to(top[0], top[1], safe_z, observation.yaw)
+    x, y = arm.carton_xy()
+    arm.go_to(x, y, safe_z, observation.yaw)
 
 
 def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPlan,
@@ -229,8 +238,8 @@ def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPla
         target_z + float(motion["place_clearance"]),
         scene.deck_z + measured_heightmap(scene).top + float(motion["stack_clearance"]),
     )
-    current = arm.tcp_pose().position
-    if not arm.go_to(current[0], current[1], safe_z, plan.yaw):
+    x, y = arm.carton_xy()
+    if not arm.go_to(x, y, safe_z, plan.yaw):
         return "ik_unreachable", 0.0
     if not arm.go_to(plan.position[0], plan.position[1], safe_z, plan.yaw):
         return "ik_unreachable", 0.0
@@ -240,7 +249,8 @@ def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPla
     arm.release()
     scene.settle()
     drift = measure.max_displacement(before, measure.positions(scene, watched))
-    if not arm.go_to(plan.position[0], plan.position[1], safe_z, plan.yaw):
+    x, y = arm.carton_xy()
+    if not arm.go_to(x, y, safe_z, plan.yaw):
         return "ik_unreachable", drift
     if arm.is_holding():
         return "grasp_slip", drift

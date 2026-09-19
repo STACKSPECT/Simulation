@@ -15,6 +15,8 @@ from theker_telemetry import FAILURES  # noqa: E402
 
 from scripts.palletize import oracle_for  # noqa: E402
 from src import measure  # noqa: E402
+from src.cell import TOOL_DOWN, grasp_offset_world  # noqa: E402
+from src.cell.arm import VacuumArray  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
@@ -128,6 +130,31 @@ def test_stability_margin_uses_the_support_polygon() -> None:
     assert measure.stability_margin(0.0, 0.0, 0.10, base) < centered
     assert measure.stability_margin(0.0, 0.05, 0.05, base) < 0.0
     assert measure.stability_margin(0.0, 0.0, 0.0, []) == 0.0
+
+
+def test_cup_block_offset_follows_the_downward_tool_frame() -> None:
+    """Cancelar el offset en mundo, sin `TOOL_DOWN`, duplica el eje Y de la rejilla."""
+    offset = (0.03, 0.02)
+    at_zero = grasp_offset_world(offset, 0.0)
+    assert abs(float(at_zero[0]) - 0.03) < 1e-9
+    assert abs(float(at_zero[1]) + 0.02) < 1e-9
+    at_right = grasp_offset_world(offset, float(np.pi / 2))
+    assert abs(float(at_right[0]) - 0.02) < 1e-9
+    assert abs(float(at_right[1]) - 0.03) < 1e-9
+    raw = grasp_offset_world(offset, 0.0, np.eye(3))
+    assert abs(float(raw[1]) - 0.02) < 1e-9
+    assert abs(float(TOOL_DOWN[1, 1]) + 1.0) < 1e-9
+
+
+def test_small_cartons_need_a_cup_block_offset_and_large_ones_do_not() -> None:
+    vacuum = VacuumArray(CFG)
+    small = vacuum.plan(tuple(CFG["packages"]["book_s"]["dims"]),
+                        float(CFG["packages"]["book_s"]["mass"]))
+    large = vacuum.plan(tuple(CFG["packages"]["std_m"]["dims"]),
+                        float(CFG["packages"]["std_m"]["mass"]))
+    assert small.tool_offset != (0.0, 0.0)
+    assert large.tool_offset == (0.0, 0.0)
+    assert small.feasible and large.feasible
 
 
 def test_run_config_names_source_level_and_real_pallet() -> None:
