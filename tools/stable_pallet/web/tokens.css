@@ -1,0 +1,202 @@
+/*
+ * Tokens de marca del panel. Copia de la plataforma STACKSPECT:
+ *   Platform/frontend/styles/colors.css  (colores, sombras, derivados)
+ *   Platform/frontend/app/globals.css    (radios, base tipográfica, foco, movimiento)
+ * Para re-sincronizar, copia los valores desde esos dos ficheros; aquí no se inventa
+ * ninguno. Regla de la plataforma, que este panel también cumple: ningún color literal
+ * (#hex, rgb(), hsl()) fuera de este fichero; app.css y app.js solo usan `var(--…)`.
+ *
+ * Identidad: blanco y negro, dos temas (claro por defecto, oscuro) que comparten nombres
+ * y significado. La selección va en «tinta» (--select), nunca en un color. Solo llevan
+ * color los tres estados (verde, ámbar, rojo), el rosa del oracle y el violeta de lo
+ * sembrado.
+ *
+ * Fuentes autoalojadas (fonts/): el panel corre en local y no debe pedir nada a la red.
+ * Son las mismas que carga la plataforma con next/font: Plus Jakarta Sans para la interfaz
+ * y Geist Mono para magnitudes.
+ */
+
+/* ── fuentes ─────────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/PlusJakartaSans-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("/fonts/PlusJakartaSans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/GeistMono-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/GeistMono-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ── 1. Base · tema claro (por defecto) ──────────────────────────────────── */
+
+:root,
+:root[data-theme="light"] {
+  --bg:          #F5F5F3;
+  --surface:     #FFFFFF;
+  --topbar:      #FFFFFF;
+  --border:      #E4E4E0;
+  --border-soft: #EDEDEA;
+  --border-hard: #C9C9C4;
+  --control-border: #85858D;
+  --row-alt:     #FAFAF8;
+  --row-hover:   #F2F2EF;
+
+  --text:    #0A0A0B;
+  --text-2:  #3A3A40;
+  --text-3:  #55555C;
+  --text-4:  #6C6C74;
+  --text-5:  #A5A5AD;
+
+  --select:     #0A0A0B;
+  --on-select:  #FFFFFF;
+  --link:       #0A0A0B;
+  --link-hover: #55555C;
+
+  --ok:   #15803D;
+  --warn: #B45309;
+  --bad:  #C62828;
+
+  --oracle:    #C81E78;
+  --synthetic: #6D28D9;
+
+  --logo:       var(--text);
+  --shadow-ink: #000000;
+  --elev-1: 0 1px 2px color-mix(in srgb, var(--shadow-ink) 5%, transparent),
+            0 1px 3px color-mix(in srgb, var(--shadow-ink) 4%, transparent);
+  --elev-2: 0 8px 24px color-mix(in srgb, var(--shadow-ink) 10%, transparent);
+
+  color-scheme: light;
+}
+
+/* ── 1. Base · tema oscuro (el del logo) ─────────────────────────────────── */
+
+:root[data-theme="dark"] {
+  --bg:          #0A0A0B;
+  --surface:     #131315;
+  --topbar:      #0A0A0B;
+  --border:      #26262A;
+  --border-soft: #1C1C20;
+  --border-hard: #3A3A40;
+  --control-border: #6B6B73;
+  --row-alt:     #101012;
+  --row-hover:   #1A1A1D;
+
+  --text:    #F4F4F5;
+  --text-2:  #C7C7CC;
+  --text-3:  #A1A1A8;
+  --text-4:  #85858D;
+  --text-5:  #55555C;
+
+  --select:     #F4F4F5;
+  --on-select:  #0A0A0B;
+  --link:       #F4F4F5;
+  --link-hover: #A1A1A8;
+
+  --ok:   #3DD68C;
+  --warn: #F0B24B;
+  --bad:  #FF6B62;
+
+  --oracle:    #FF5CB0;
+  --synthetic: #B692FF;
+
+  --logo:       var(--text);
+  --shadow-ink: #000000;
+  --elev-1: 0 1px 2px color-mix(in srgb, var(--shadow-ink) 40%, transparent);
+  --elev-2: 0 12px 32px color-mix(in srgb, var(--shadow-ink) 55%, transparent);
+
+  color-scheme: dark;
+}
+
+/* ── 2. Derivados, por uso (iguales en los dos temas) ────────────────────── */
+
+:root {
+  --select-row:    color-mix(in srgb, var(--select) 7%, transparent);
+  --select-fill:   color-mix(in srgb, var(--select) 14%, var(--surface));
+  --neutral-fill:  color-mix(in srgb, var(--text-2) 10%, var(--surface));
+  --bad-fill:      color-mix(in srgb, var(--bad) 16%, var(--surface));
+
+  --synthetic-fill: color-mix(in srgb, var(--synthetic) 10%, transparent);
+
+  --ok-fill:       color-mix(in srgb, var(--ok) 10%, transparent);
+  --warn-fill:     color-mix(in srgb, var(--warn) 10%, transparent);
+  --bad-fill-soft: color-mix(in srgb, var(--bad) 8%, transparent);
+
+  --ok-halo:    color-mix(in srgb, var(--ok) 25%, transparent);
+  --warn-halo:  color-mix(in srgb, var(--warn) 25%, transparent);
+  --bad-halo:   color-mix(in srgb, var(--bad) 25%, transparent);
+
+  /* Propios del panel, salidos de los de la marca: los centros de masa reales y
+     calculados hablan el idioma de los estados (correcto / atención), no el de MuJoCo
+     (allí siguen siendo verde y naranja). */
+  --com-true: var(--ok);
+  --com-est:  var(--warn);
+
+  /* Sombra del pulgar del scrubber: la misma tinta de sombra que el resto. */
+  --thumb-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-ink) 35%, transparent);
+
+  /* Tipografía y forma (globals.css). */
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  --radius-1: 8px;
+  --radius-2: 12px;
+  --radius-3: 16px;
+  --radius-pill: 999px;
+
+  --page-gap: 20px;
+  --page-pad: 32px;
+  --topbar-h: 64px;
+}
+
+/* ── 3. Base global (globals.css) ────────────────────────────────────────── */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { height: 100%; }
+
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Un cambio de tema se nota, pero no deslumbra: los colores se funden. */
+body, header, main, section, td, th, select, button, label {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+:focus-visible { outline: 2px solid var(--select); outline-offset: 2px; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
