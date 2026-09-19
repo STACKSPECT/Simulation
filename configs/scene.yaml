@@ -88,6 +88,11 @@ table:
 # dentro del alcance comprobado: coincide con el centro de la mesa, que es la pose de
 # agarre ya barrida con IK.
 #
+# La banda acaba 50 mm más allá de `station` (center -0.85, largo 1.40 → labio en
+# x=-0.15). No se alarga: el palé europeo empieza en x=0. Un `std_m` de 0.42 m no
+# cabe entero con el centro en la estación; `Belt.present()` corta la consigna cuando
+# la huella sigue en la cubierta, no cuando el centro llega a `station`.
+#
 # La banda se mueve de verdad: un `slide` con actuador de velocidad arrastra el paquete
 # y parar es poner la consigna a cero. NO se teletransporta nada — el punto de tener
 # cinta es que el paquete llegue con la pose que traiga, incluida la torcida.

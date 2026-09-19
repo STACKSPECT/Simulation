@@ -52,6 +52,12 @@ import numpy as np
 # la espera acaba expirando, que es el camino físico a `timeout`.
 BELT_BAND = 0.04
 
+# Holgura entre el canto delantero y el final de la cubierta. La estación está a 50 mm
+# del labio (station -0.20, banda hasta -0.15). Empujar el CENTRO hasta ahí deja un
+# `std_m` de 0.42 m con 160 mm en el aire, a 0.25 m/s: es lo que se veía como "la cinta
+# tira la caja y luego para". Con esto la huella se queda en la cubierta.
+LIP_GAP = 0.03
+
 
 class Supply(Protocol):
     """De dónde salen los paquetes. Tres implementaciones, un contrato."""
@@ -127,6 +133,12 @@ class Belt(_BaseSupply):
     trayecto entero: llega con la pose que traiga, torcida incluida. Inyectar en la
     entrada es modelar el alimentador de aguas arriba, que es lo que hay antes de la
     cinta en una planta de verdad.
+
+    La estación es el sitio de agarre barrido con IK, no el labio de la banda. Parar
+    cuando el centro llega a `station` deja el cartón colgando: un `std_m` de 0.42 m
+    se sale 160 mm de una cubierta que sólo sigue 50 mm más. La consigna se corta
+    cuando la huella (con el yaw) todavía cabe, y el asentado es hasta reposo medido,
+    no 0.25 s fijos — si se devuelve rodando, `_pick` sella una pose que ya no está.
     """
 
     def __init__(self, scene):
@@ -139,6 +151,7 @@ class Belt(_BaseSupply):
         self.surface_z = float(cfg["height"])
         length = float(cfg["dims"][0])
         self.entry_x = float(cfg["center"][0]) - length / 2 + 0.12
+        self.deck_end_x = float(cfg["center"][0]) + length / 2
         self.running = False
 
     def stage(self, scene) -> None:
@@ -166,12 +179,23 @@ class Belt(_BaseSupply):
         z = float(scene.data.xpos[scene.body_id(index)][2])
         return abs(z - (self.surface_z + box.dims_m[2] / 2)) < BELT_BAND
 
+    def _half_x(self, scene, index: int) -> float:
+        """Mitad de la huella en X del mundo, con el yaw que trae ahora."""
+        length, width, _ = scene.boxes[index].dims_m
+        yaw = scene.box_yaw(index)
+        return 0.5 * (length * abs(np.cos(yaw)) + width * abs(np.sin(yaw)))
+
+    def _stop_x(self, scene, index: int) -> float:
+        """Hasta dónde puede ir el centro sin que el canto delantero se salga."""
+        on_deck = self.deck_end_x - self._half_x(scene, index) - LIP_GAP
+        return min(self.station_x, on_deck)
+
     def _drive(self, scene) -> None:
         """Un tick de banda: arrastra hacia la estación lo que vaya montado en ella."""
         for index in self.pending:
             if not self._riding(scene, index):
                 continue
-            if float(scene.data.xpos[scene.body_id(index)][0]) > self.station_x:
+            if float(scene.data.xpos[scene.body_id(index)][0]) >= self._stop_x(scene, index) - self.tol:
                 continue
             joint = scene.mujoco.mj_name2id(
                 scene.model, scene.mujoco.mjtObj.mjOBJ_JOINT, scene.boxes[index].joint
@@ -206,9 +230,14 @@ class Belt(_BaseSupply):
         while scene.clock < deadline:
             self._drive(scene)
             scene.step(1.0 / scene.cfg["episode"]["control_hz"])
-            if abs(float(scene.data.xpos[body][0]) - self.station_x) < self.tol:
+            x = float(scene.data.xpos[body][0])
+            if x >= self._stop_x(scene, index) - self.tol:
                 self._stop(scene)
-                scene.settle(0.25)            # que deje de rodar antes de mirarlo
+                scene.settle_until_rest()
+                if not self._riding(scene, index):
+                    self.jammed = True
+                    self.current = None
+                    return None
                 return scene.boxes[index].package_id
 
         # La banda empujó lo que pudo y el cartón no llegó: atasco.

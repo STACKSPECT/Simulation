@@ -10,14 +10,27 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+import numpy as np  # noqa: E402
 from src.cell import tcp_frame  # noqa: E402
 from src.cell.arm import ArmController  # noqa: E402
-from src.cell.conveyor import Belt, make_supply  # noqa: E402
+from src.cell.conveyor import LIP_GAP, Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import build_scene  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
 from src.vision.oracle import OracleDetector  # noqa: E402
+
+
+def _assert_on_deck(scene, index: int, slack: float = 0.01) -> None:
+    """El canto delantero se queda en la cubierta: no se ha tirado por el labio."""
+    length, width, _ = scene.boxes[index].dims_m
+    yaw = scene.box_yaw(index)
+    half_x = 0.5 * (length * abs(np.cos(yaw)) + width * abs(np.sin(yaw)))
+    x = float(scene.box_pose(index)[0][0])
+    belt = scene.cfg["conveyor"]
+    deck_end = float(belt["center"][0]) + float(belt["dims"][0]) / 2
+    assert x + half_x <= deck_end + slack, (x, half_x, deck_end)
+    assert x + half_x <= deck_end - LIP_GAP + slack
 
 
 def test_scenes_compile_for_all_sources() -> None:
@@ -62,7 +75,24 @@ def test_belt_moves_the_package_through_physics() -> None:
         assert package_id is not None
         assert len({round(value, 3) for value in positions}) > 10
         assert positions[-1] - positions[0] > 0.4
-        assert abs(positions[-1] - scene.cfg["conveyor"]["station"][0]) < 0.04
+        _assert_on_deck(scene, supply.current)
+        assert scene.max_box_speed() < 0.01
+    finally:
+        scene.close()
+
+
+def test_belt_stops_before_throwing_mixed_boxes() -> None:
+    """Nivel 22: la cinta no empuja hasta el labio. El canto se queda en la cubierta."""
+    scene = build_scene(level_id=22, seed=1, simplified=True)
+    try:
+        supply = Belt(scene)
+        supply.stage(scene)
+        for _ in range(3):
+            assert supply.present(scene) is not None
+            _assert_on_deck(scene, supply.current)
+            assert scene.max_box_speed() < 0.01
+            scene.park_box(supply.current)
+            supply.release(scene)
     finally:
         scene.close()
 
