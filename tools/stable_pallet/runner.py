@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from .controls import RunCancelled, ViewerControls
@@ -145,13 +146,27 @@ def main(argv: list[str] | None = None) -> int:
 # -- panel side --------------------------------------------------------------------
 
 
+def interpreter(viewer: bool, python: Path | str | None = None) -> str:
+    """The interpreter a child process should run under.
+
+    macOS only lets MuJoCo's passive viewer run from `mjpython`, a launcher that gives the
+    window the main thread. It sits next to `python` in the venv's `bin/`, so a run that
+    wants the window takes that one when it is there. Anywhere else it is plain `python`."""
+    python = Path(python or sys.executable)
+    if viewer and sys.platform == "darwin":
+        launcher = python.parent / "mjpython"
+        if launcher.exists():
+            return str(launcher)
+    return str(python)
+
+
 class RunnerClient:
     """A running experiment, seen from the panel."""
 
     def __init__(self, request: dict[str, Any], on_message: Callable[[dict[str, Any]], None]) -> None:
         self.on_message = on_message
         self.process = subprocess.Popen(  # noqa: S603 - fixed argv, only the request varies
-            [sys.executable, "-m", "stable_pallet.runner", json.dumps(request)],
+            [interpreter(bool(request.get("viewer"))), "-m", "stable_pallet.runner", json.dumps(request)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

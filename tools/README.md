@@ -40,6 +40,13 @@ El panel muestra nueve tarjetas, tomadas de `configs/pallet.yaml`, y un selector
 modo. **EJECUCIÓN** llama a `scripts/palletize.py` y puede publicar telemetría.
 **DEPURACIÓN** llama al runner de este directorio y dice explícitamente que no publica.
 
+El aspecto del panel es el de la marca STACKSPECT: `stable_pallet/web/tokens.css` es una
+copia de `Platform/frontend/styles/colors.css` y `app/globals.css` (colores en claro y
+oscuro, radios, tipografías), y `web/brand/`, `web/fonts/` y los iconos salen del mismo
+sitio. Las fuentes (Plus Jakarta Sans y Geist Mono) van autoalojadas para que el panel no
+pida nada a la red. Para re-sincronizarlo, copia los valores de esos ficheros a
+`tokens.css`; `app.css` y `app.js` no llevan ningún color literal, solo `var(--…)`.
+
 Los escenarios se buscan primero desde donde estés y después desde `tools/`, así que
 `scenarios/mixed_boxes.yaml` funciona igual desde la raíz del repo que desde aquí.
 

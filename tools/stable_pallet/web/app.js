@@ -401,6 +401,14 @@ document.addEventListener("keydown", (event) => {
   if (event.code === "ArrowRight") command({ command: "step", delta: 1 });
 });
 
+/* The theme is picked by the script in <head> before the first paint; this only flips it.
+   Same key and attribute as the platform (each keeps its own copy: different origins). */
+$("theme-toggle").addEventListener("click", () => {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch (error) { /* private window: keep it for this page only */ }
+});
+
 /* -- start ---------------------------------------------------------------------------- */
 
 fetch("/api/experiments")
