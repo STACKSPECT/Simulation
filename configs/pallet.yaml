@@ -169,24 +169,126 @@ levels:
      n_packages: 8, types: [random], yaw_jitter_deg: 0, pos_jitter_m: 0.000,
      cog: adversarial, loader_jitter: true}
 
-# Los pesos del score de `src/planner/heuristic.py`. Suman 1.0 y son adimensionales.
+# Los mandos de `src/planner/heuristic.py`, que es el adaptador sobre `placing/`.
 #
 # Están aquí y no en el código porque se van a tocar mucho y cada cambio tiene que poder
-# explicarse. Los valores de partida salen de normalizar los del planificador de abajo,
-# que sí están medidos; cuando se ajuste uno, va su medida al lado.
+# explicarse. Para cambiar el comportamiento se tocan los pesos, no el código; un peso a
+# 0 apaga su término por completo.
+#
+# ── EL CONVENIO DE ALTURAS, QUE ES LA TRAMPA QUE MÁS CUESTA VER ────────────────────
+# `placing` trabaja en Z DEL MUNDO y este repo en metros SOBRE LA CUBIERTA. La
+# traducción la hace el adaptador, y la hace en los DOS sitios: el mapa y el límite de
+# altura. Por eso aquí NO hay un `max_stack_height`: se calcula como
+# `pallet.deck_thickness + pallet.max_height` (0.144 + 1.35 = 1.494) y así no puede
+# quedarse la mitad sin traducir. Medio convenio funciona y no se nota hasta que el
+# montón se pasa de alto o deja de aceptar cajas sin motivo.
 heuristic:
-  cell_size: 0.040               # lado de celda del mapa de alturas, en metros.
-                                 # Punto de partida = un cuarto del lado menor del
-                                 # paquete más pequeño que puede salir (0,16 m).
-                                 # SIN BARRER todavía: cuando se mida, la tabla va aquí.
-  min_support: 0.60              # por debajo, el hueco no es candidato
-  weights:
-    support: 0.32                # fracción de huella sobre algo sólido
-    package_cog: 0.22            # cuánto descentra el paquete su propio apoyo
-    pallet_cog: 0.20             # a dónde deja el CoG del montón
-    overhang: 0.10               # cuánto sobresale del palé
-    compactness: 0.09            # hueco desperdiciado alrededor
-    flatness: 0.07               # diferencia de altura bajo la huella
+  cell_size: 0.010               # lado de celda del mapa de alturas, en metros.
+                                 # La rejilla del palé sale 120x80. Es el valor por
+                                 # defecto de `placing`, no una medida de esta celda:
+                                 # SIN BARRER, igual que lo estaba el 0.040 anterior.
+                                 # Coste medido en la feature: 16 ms/caja con 60x40 a
+                                 # 1 cm, y el coste va con el cuadrado de la rejilla.
+                                 # Si estorba, 0.020 antes que tocar nada más.
+  clearance: 0.040               # holgura alrededor de la huella. Es la misma de
+                                 # `pallet.clearance`, que sí está medida aquí: con
+                                 # ventosa no la impone el dedo.
+  support_tol: 0.001             # por debajo de 1 mm, dos alturas son la misma
+  max_stack_height: 0.55         # altura de montón, en metros SOBRE LA CUBIERTA.
+                                 # NO es `pallet.max_height` (1.35): ése es el papel del
+                                 # palé y esta celda no llega. El barrido de IK de
+                                 # `tests/test_cell.py` valida el brazo hasta
+                                 # `deck_z + 0.55` y nada más arriba, así que 0.55 es la
+                                 # única altura que está MEDIDA aquí.
+                                 #
+                                 # Y ojo, porque esta cifra hace dos cosas: es el límite
+                                 # duro (`max_stack_height` descarta la pose) y es la
+                                 # ESCALA de `lowness` (= 1 − z_base/límite) y de lo que
+                                 # `peak_penalty` compara. Ponerla en 1.494 no sólo
+                                 # permite montones que el brazo no alcanza: diluye el
+                                 # gradiente de `lowness` 3.4x y la heurística se pone a
+                                 # hacer torre en vez de llenar la capa, con el margen de
+                                 # estabilidad en negativo desde la segunda caja. Medido.
+  min_support_ratio: 0.60        # por debajo, el hueco no es candidato. Lo leen el
+                                 # adaptador y `naive.GridPlanner`: una sola cifra.
+  allow_unobserved: true         # ARRANCA EN TRUE. Bajarlo a false en cuanto esté
+                                 # medida la cobertura de las tres cámaras sobre un palé
+                                 # vacío (AGENTS.md §9): con oclusión sin medir, un
+                                 # `false` deja de aceptar cajas y parece otra cosa.
+  proximity_band: 0.02           # a qué distancia cuenta un vecino como apoyo lateral
+  levelness_scale: 0.2           # la desviación de altura que ya se considera mucha
+  useful_gap: 0.0                # franja más estrecha que todavía sirve para algo.
+                                 # 0 = el lado menor de la caja que se está colocando,
+                                 # que es lo honesto mientras no haya catálogo fijo.
+  yaws: [0.0, 90.0]              # GRADOS. `placing` añade 180/270 solo, cuando el CoG
+                                 # del paquete está descentrado y el giro cambia algo.
+  # El filtro de alcance va APAGADO a propósito: el adaptador no le pasa `robot_xy`, así
+  # que `reachability` queda neutro (1.0 en todas las poses) y `out_of_reach` no descarta
+  # ninguna. Las cifras de alcance de la feature son de un Panda y aquí el robot es un
+  # UR10e: hay que barrer el IK y medirlas (AGENTS.md §7), no copiarlas.
+  weights:                       # los 14 términos de `placing`. NO suman 1, y no tienen
+                                 # que sumarlo: el score se normaliza dividiendo por la
+                                 # suma de pesos, y sale en [0,1] igual.
+    void_fill: 1.2               # no dejar aire atrapado debajo
+    support_ratio: 1.0           # fracción de la huella que apoya
+    levelness: 0.8               # mantener plano el techo del montón
+    gap_waste: 0.8               # no dejar franjas demasiado estrechas para llenarlas
+    reachability: 0.7            # neutro mientras `robot_xy` no esté puesto
+    lowness: 0.6                 # preferir z_base bajo
+    peak_penalty: 0.5            # no levantar el punto más alto
+    overhang: 0.5                # penalizar el voladizo
+    bridge: 0.5                  # tender una caja sobre dos vecinas
+    com_margin: 0.4              # margen del CoG del paquete al borde de su apoyo
+    edge_flush: 0.4              # romper alineaciones de esquina
+    lateral_proximity: 0.3       # apoyarse contra vecinos o el canto
+    seam_break: 0.2              # evitar juntas corridas
+    pallet_com: 0.0              # acercar el CoG del montón al centro del palé
+    # Tres notas para quien toque esta tabla:
+    #
+    #   - `bridge` y `gap_waste` tiran en dirección contraria a `void_fill`. Un puente
+    #     tiene aire debajo por construcción, así que su peso tiene que pagar lo que
+    #     `void_fill` le quita o no gana nunca. Los tres se miran juntos.
+    #   - `pallet_com` está a 0 a propósito, pero el `PalletState` que necesita YA se
+    #     acumula en `ScorePlanner.record()`. Subirlo es editar este número y medir.
+    #   - Ninguno de estos catorce está barrido en ESTA celda: son los que la feature
+    #     midió sobre un palé de 0.60x0.40 con un Panda. Cuando se ajuste uno, su medida
+    #     va aquí al lado.
+
+# La percepción del palé: de dónde sale el mapa de alturas cuando NO se usa el oráculo.
+#
+# Tres cámaras miran al palé: la cenital —que es la misma `top` que sube a la plataforma,
+# compartida a propósito— y dos diagonales opuestas. Las diagonales viven aquí y no en
+# `cameras:` porque ese bloque es un VOCABULARIO CERRADO (`top|side|iso|camera`) validado
+# contra el CHECK de `snapshots.view`: una cámara con otro nombre ahí haría que el PNG
+# subiera a Storage y la base rechazara la fila con un 23514. Éstas no suben fotos, sólo
+# alimentan la fusión, así que no tienen por qué pasar por ese vocabulario.
+#
+# Por qué dos diagonales opuestas y no una: `min_upward_nz` tira los costados de las
+# cajas y se queda sólo con las tapas y la cubierta. Lo que una diagonal ve de canto, la
+# otra lo ve de plano. Con la cenital sola, cualquier caja tapa lo que tiene detrás.
+perception:
+  cameras: [top, diag_a, diag_b]
+  z_min: -0.005                  # por debajo de la cubierta no hay montón que medir
+  z_max: 2.5
+  depth_min: 0.05                # metros; más cerca que esto es la propia cámara
+  depth_trunc: 8.0
+  min_upward_nz: 0.45            # cuánto tiene que mirar hacia arriba la normal local
+                                 # de un píxel para contar como superficie apilable
+  rig:
+    # SIN MEDIR: posiciones de arranque, escaladas de la diagonal del palé de 0.60x0.40
+    # de la feature a este europalé. `diag_a` cae sobre la bahía del remolque, así que la
+    # oclusión hay que MIRARLA en el visor y dejar el número de cobertura escrito aquí
+    # antes de fiarse (AGENTS.md §9). Sin ese número, `allow_unobserved` se queda en true.
+    diag_a:
+      position: [-0.36, -0.76, 1.90]
+      lookat: [0.60, 0.00, 0.144]
+      fovy: 75
+      resolution: [640, 480]
+    diag_b:
+      position: [1.56, 0.76, 1.90]
+      lookat: [0.60, 0.00, 0.144]
+      fovy: 75
+      resolution: [640, 480]
 
 # El planificador de `src/planner/naive.py::BeamPlanner`, que es el que corre hoy.
 #

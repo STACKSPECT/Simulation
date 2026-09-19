@@ -39,8 +39,8 @@ abrir la de los demás.
 
 | Capa | Carpeta | Qué hace |
 |---|---|---|
-| **Visión** | `src/vision/` | Ve el paquete que la fuente presenta (`detect.py`) y lo **mide** ya en la mano: dimensiones, masa, centro de gravedad (`gauge.py`) |
-| **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`) |
+| **Visión** | `src/vision/` | Ve el paquete que la fuente presenta (`detect.py`), lo **mide** ya en la mano (`gauge.py`) y **mide la superficie del palé** con tres cámaras de profundidad (`depth.py` renderiza, `surface.py` desproyecta y fusiona, numpy puro) |
+| **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`, adaptador sobre `placing/`) |
 | **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión— y cámaras (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`) |
 | Medida | `src/measure.py` | El resultado: error, apoyo, vuelo, CoG del palé, margen de estabilidad |
 | Trazabilidad | `src/telemetry.py` | **Única** frontera con la plataforma |
@@ -74,8 +74,8 @@ que consensuar antes de tocar nada. Quién produce qué:
 |---|---|---|---|
 | `Observation` | `vision/detect.py` | `episode.py` (para ir a coger) | id, pose en la cinta, dims aproximadas, `confidence` |
 | `PackageSpec` | `vision/gauge.py` | `planner`, `telemetry` | `dims_m`, `mass_kg`, `cog_offset_m`, `grasp_width`, `type_name` |
-| `Heightmap` | `planner/heightmap.py` | `planner/heuristic.py` | rejilla de alturas del palé, en metros sobre la cubierta |
-| `PlacementPlan` | `planner/heuristic.py` | `episode.py` (dónde soltar) | pose objetivo, `layer`, `slot`, `score`, apoyo previsto |
+| `Heightmap` | `planner/heightmap.py` | `planner/heuristic.py` | rejilla de alturas del palé, en metros sobre la cubierta, y `observed`: qué celdas vio alguna cámara. Altura 0 sin observar NO es cubierta libre |
+| `PlacementPlan` | `planner/heuristic.py` | `episode.py` (dónde soltar) | pose objetivo (centro, en el mundo, yaw en radianes), `layer`, `slot`, `score`, apoyo previsto, `breakdown` de 14 términos |
 | `Placement`, `PalletState` | `measure.py` | `telemetry.py` | lo medido: error, apoyo, vuelo, CoG, margen, relleno |
 
 Y cuatro `Protocol` —`Detector`, `Gauge`, `Planner`, `Sink`— que es lo que permite
@@ -110,6 +110,10 @@ python scripts/palletize.py --source truck      # primer nivel de camión
 python scripts/palletize.py --level 23          # nivel concreto de cinta
 python scripts/palletize.py --no-oracle-gauge --no-telemetry --level 11
 python scripts/palletize.py --no-oracle-gauge --precise-com --no-telemetry --level 11
+python -m placing                               # la heuristica sola: 15 asserts, sin nada
+python scripts/palletize.py --no-oracle-heightmap   # el mapa, con camaras
+python scripts/palletize.py --beam-planner      # el beam search, para comparar
+python scripts/palletize.py --naive-planner     # la linea base en rejilla
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
 python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
@@ -232,6 +236,41 @@ casa con el de la traza de CoG: la imagen y ese punto del gráfico son el mismo 
 
 ## 6. Lo nuevo respecto al guionizado
 
+### La percepción del palé, y las seis cámaras
+
+El mapa de alturas se MIDE con tres cámaras que miran al palé: la cenital y dos
+diagonales opuestas. Se renderiza profundidad, se desproyecta a puntos del mundo, se tira
+todo lo que no mire hacia arriba (`min_upward_nz`: tapas y cubierta sí, costados no), se
+rasteriza sobre la huella del palé y se fusiona quedándose con lo más alto de cada celda.
+
+**En MJCF hay seis cámaras y en el vocabulario de la plataforma hay cuatro, y eso es a
+propósito.** `snapshots.view` es un CHECK cerrado —`top | side | iso | camera`— y sólo
+las de `cameras:` suben fotos. Las dos diagonales viven en `perception.rig:`, otro bloque,
+porque no suben ninguna: si se declararan ahí abajo, `_cameras_xml` las rechazaría, y si
+se colaran, el PNG subiría a Storage y la base rechazaría la fila con un 23514.
+
+**La cenital es la MISMA `top` que ve la plataforma**, compartida a propósito. Dos
+cámaras cenitales que se van separando con los años acaban en una foto y un mapa que no
+se corresponden.
+
+Tres avisos:
+
+- **`observed` no es decoración.** Una celda que ninguna cámara vio guarda altura 0, que
+  es indistinguible de cubierta libre. No lo son. `allow_unobserved` decide qué hacer con
+  ellas, y arranca en `true` porque la cobertura de este rig **no está medida**: sobre un
+  palé vacío da 93.3 %, no el 98 % que haría razonable bajarlo a `false`. Las posiciones
+  de `perception.rig` son de arranque, escaladas del palé de 0.60x0.40 de la feature.
+- **Las cámaras ven el brazo.** Sobre un palé vacío con el brazo en casa, el `top` del
+  mapa sale 1.18 m: no es el montón, es el propio robot cruzando el encuadre. A mitad de
+  episodio el brazo está en la estación y no estorba, pero el problema está ahí y lo que
+  toca es excluir los geoms del robot del render de profundidad, no subir `z_max`.
+- **El mapa oráculo tiene que contar la MISMA verdad.** `measure_ground_truth` estampa la
+  mesa, que se mete sobre la esquina del palé (x∈[-0.56, 0.16] contra un palé que empieza
+  en x=0.00). Sin eso, el oráculo ofrece una esquina que no existe, el planificador se va
+  derecho a ella —está baja, pegada al canto y apoya al 100 %— y el brazo empuja la caja
+  contra la mesa: medido, se queda a 135 mm del destino y el episodio muere en
+  `ik_unreachable`. Las cámaras ya la veían; el oráculo, no.
+
 ### Las fuentes
 
 `cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. La
@@ -277,20 +316,55 @@ el indicador que la define entera.
 
 ### La heurística
 
-Mide la altura de todo el palé y de sus paquetes, y con las dimensiones del que tiene en
-la mano puntúa cada hueco candidato. El score es un número entre 0 y 1 y el hueco elegido
-es el máximo.
+Mide la altura de todo el palé, y con las dimensiones del paquete que tiene en la mano
+enumera todas las poses discretas que caben, descarta las inviables y puntúa el resto.
+El score es un número entre 0 y 1 y el hueco elegido es el máximo.
 
-Tres cosas que van en el diseño desde el principio:
+Las cuentas están en **`placing/`**, en la raíz del repo: 9 ficheros, numpy y nada más.
+`src/planner/heuristic.py` es sólo el adaptador. **Es el planificador por defecto.**
+`--beam-planner` y `--naive-planner` existen para compararse contra él, y el modo que
+se imprime al arrancar dice cuál está corriendo: dos ejecuciones que se comparan entre
+sí tienen que distinguirse mirando la salida, no recordando qué banderas se pusieron.
 
-- **El mapa de alturas se mide, no se lleva en un contador.** Si el planificador arrastra
-  su propia idea de cómo está el palé, a la tercera caja torcida deja de coincidir con la
-  realidad y ya no se recupera. `heightmap.py` lo saca del estado de la escena.
-- **El score devuelve su desglose**, no solo el total. Va al `payload` del evento `plan`
-  junto a `layer` y `slot` (sobrar es inocuo), y es lo que permite responder "¿por qué
-  puso esa caja ahí?" sin volver a correr el episodio.
-- **Un hueco sin candidato válido no es una excepción**: es un `wrong_placement` que hay
-  que decidir y registrar, no un crash.
+**`placing/` no se toca.** Se copió entero y su frontera está blindada con un assert
+ejecutable, no con una convención: `python -m placing` corre 15 comprobaciones y la
+primera es que no se ha colado ningún módulo pesado en `sys.modules`. Esa frontera es lo
+que permite ajustar los pesos sin arrancar MuJoCo —el ciclo pasa de minutos a
+milisegundos— y se rompe con un solo import de conveniencia. Si algún día necesita un
+dato del simulador, ese dato entra por el contrato o no entra.
+
+Cuatro cosas que van en el diseño desde el principio:
+
+- **El mapa de alturas se mide, no se lleva en un contador.** `heightmap.py` lo saca de
+  las cámaras (`measure`) o de la escena (`measure_ground_truth`, el oráculo).
+- **El score devuelve su desglose**, los 14 términos por separado. Va al `payload` del
+  evento `plan` junto a `layer`, `slot` y `observed_pct` (sobrar es inocuo), y es lo que
+  permite responder "¿por qué puso esa caja ahí?" sin volver a correr el episodio.
+- **Un hueco sin candidato válido no es una excepción**: es un `wrong_placement`. El
+  porqué viaja en `reject` del evento `fail`, y distingue "no cabe" —que cierra el palé—
+  de "el brazo ya no llega" —que dice que el palé está mal puesto respecto al robot—.
+  Y `{}` no es lo mismo que "todos rechazados": significa que no se generó ni un
+  candidato, o sea que la caja no cabe ni en un palé vacío.
+- **Para cambiar el comportamiento se tocan los pesos, no el código.** Los 14 están en
+  `configs/pallet.yaml: heuristic.weights`; un peso a 0 apaga su término.
+
+**Tres traducciones fallan en SILENCIO** y están las tres en la cabecera del adaptador:
+`yaw` va en grados en `placing` y en radianes aquí; las alturas van en Z del mundo allí y
+sobre la cubierta aquí —y hay que traducir el mapa **y** el límite de altura, porque medio
+convenio funciona—; y `measure.Placement.position` viene en el frame del PALÉ, no del
+mundo. Las tres tienen su test en `tests/test_pallet.py`, sin escena.
+
+**`heuristic.max_stack_height` no es `pallet.max_height`.** 0.55 m sobre la cubierta es
+hasta donde el barrido de IK de `tests/test_cell.py` valida el brazo; 1.35 es el papel
+del palé. Y la cifra hace dos cosas: es el límite duro y es la ESCALA de `lowness`.
+Ponerle el número grande diluye el gradiente 3.4x y la heurística se pone a hacer torre
+en vez de llenar la capa. Medido.
+
+**El filtro de alcance va apagado.** El adaptador no le pasa `robot_xy`, así que
+`reachability` queda neutro y `out_of_reach` no descarta nada: las cifras de alcance que
+trae `placing` son de un Panda. Mientras siga así, el planificador puede elegir un hueco
+del palé al que el UR10e no llega, y eso sale como `ik_unreachable`. Encenderlo es medir
+el barrido y poner tres números, no tocar código.
 
 Ya existe una línea base medida en `tools/`: frente a first-fit, el beam search pasó de
 50 % a 100 % de pilas estrictamente estables y redujo el descentramiento medio del CoM
@@ -337,13 +411,22 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 - **No toques `configs/` a ojo.** Cada valor raro tiene su medida al lado; si cambias uno,
   deja escrito cómo lo mediste.
 - **No añadas dependencias** sin mirar antes si MuJoCo o numpy ya lo hacen.
+- **No metas nada dentro de `placing/`**, ni un import de conveniencia. Es código copiado
+  de otro repo y su valor es justamente que no sabe que existe un simulador. Si hace
+  falta un dato de la escena, entra por el contrato o no entra; y lo que haya que
+  adaptar se adapta en `src/planner/heuristic.py`, que para eso está.
 
 ## 9. Cómo se comprueba, en este orden
 
+0. **El módulo de la heurística, solo:** `python -m placing`. Quince comprobaciones sin
+   simulador ni red, y la primera es la frontera de imports, que es lo que se rompe al
+   integrar. Cuesta un segundo: que se quede en el CI.
 1. **Sin red ni simulador:** `python tests/test_pallet.py`. Que las claves de cada fila
    sean las columnas de su tabla, que los `seq` no se repitan, que las vistas y las
-   causas de fallo estén en su vocabulario. Falla en segundos, no tras tres minutos de
-   simulación.
+   causas de fallo estén en su vocabulario, y las tres traducciones del adaptador —yaw en
+   radianes, la altura 0 en la cubierta y no en el suelo, y el frame del palé en
+   `record`—, que son las que fallan sin dar error. Falla en segundos, no tras tres
+   minutos de simulación.
 2. **La medida, sola:** `python -m src.measure`. Sus asserts cubren el CoG con cajas
    fuera de tolerancia y el margen contra el polígono de soporte.
 3. **La celda:** `python tests/test_cell.py`. Compila las tres fuentes, comprueba las

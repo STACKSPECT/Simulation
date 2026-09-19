@@ -124,6 +124,12 @@ a non-oracle one.
 
 Verified file by file against the source on this branch, not from memory.
 
+> **Stale below the planner rows.** This table was written for the skeleton and was not
+> refreshed when the UR10e cell landed on `dev`: `episode.py`, `measure.py`,
+> `telemetry.py`, `cell/*` and `scripts/palletize.py` are all implemented today, whatever
+> the rows say. Only the rows touched by the placement heuristic have been brought up to
+> date here. Fixing the rest is a separate pass.
+
 **Implemented** means there is working code. **Stub** means the functions or classes are
 declared with the right signature but raise `NotImplementedError`. **Docstring only**
 means the file contains its specification and nothing executable — the work is to port or
@@ -144,11 +150,14 @@ write it.
 | `src/cell/conveyor.py` | 🟡 Stub | `present()` and `release()` raise. **Written from scratch** — no predecessor to port from. |
 | `src/vision/__init__.py` | ⬜ Docstring only | Package marker. |
 | `src/vision/detect.py` | 🟡 Stub | `CameraDetector.observe()` raises. Approach undecided (rendered RGB-D, degraded segmentation buffer, or a trained model). |
-| `src/vision/gauge.py` | 🟡 Stub | `WristGauge.measure()` raises. Approach undecided. |
+| `src/vision/gauge.py` | ✅ **Implemented** | `WristGauge`, wrist-load based. |
+| `src/vision/surface.py` | ✅ **Implemented** | Depth → world points → pallet grid → fused height map. **numpy only**, no MuJoCo: that is what makes the fusion testable without a simulator. Ported from `pallet_perception`. |
+| `src/vision/depth.py` | ✅ **Implemented** | The MuJoCo side: renders depth from a named camera and reads its pose and intrinsics. The only perception file that touches the simulator. |
+| `placing/` (9 files) | ✅ **Vendored, do not edit** | The placement heuristic: enumerate every discrete pose, hard-filter, score with 14 terms. numpy and nothing else; `python -m placing` runs 15 checks, the first of which asserts that boundary. Copied whole from `placing-algo`. |
 | `src/vision/oracle.py` | ⬜ Docstring only | `OracleDetector` / `OracleGauge` sketched in comments; ~10 lines each once `cell/scene.py` exists. |
 | `src/planner/__init__.py` | ⬜ Docstring only | Package marker. |
-| `src/planner/heightmap.py` | 🟡 Stub | `measure()` raises. |
-| `src/planner/heuristic.py` | 🟡 Stub | `ScorePlanner.choose()` raises; `__init__` stores the config. |
+| `src/planner/heightmap.py` | ✅ **Implemented** | `measure()` fuses three depth cameras into the pallet grid; `measure_ground_truth()` is the oracle, moved here from `naive.py`, and stamps the table where it intrudes over the deck. |
+| `src/planner/heuristic.py` | ✅ **Implemented** | `ScorePlanner`, the adapter over `placing/`. ~200 lines, of which the interesting part is four unit translations that fail silently. The default planner; `--beam-planner` and `--naive-planner` opt out. |
 | `src/planner/naive.py` | ⬜ Docstring only | `GridPlanner` sketched in a comment; ~20 lines. |
 | `scripts/palletize.py` | 🟡 Stub | `main()` raises. This is the entry point and the only place that picks stub vs. real. |
 | `tests/test_pallet.py` | ⬜ Docstring only | **No tests exist.** The file lists what to port and what to add. |

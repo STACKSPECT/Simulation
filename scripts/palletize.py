@@ -19,6 +19,7 @@ if "--viewer" not in sys.argv:
 import imageio.v3 as iio  # noqa: E402
 from theker_telemetry import EpisodeResult, RunLog  # noqa: E402
 
+from src.cell.render import draw_heightmap  # noqa: E402
 from src.cell.scene import build_scene, levels, load_configs  # noqa: E402
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
@@ -50,14 +51,18 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--label", default="UR10e · tres fuentes")
     cli.add_argument("--oracle-vision", action=argparse.BooleanOptionalAction, default=True)
     cli.add_argument("--oracle-gauge", action=argparse.BooleanOptionalAction, default=True)
+    # El mapa de alturas: de las poses de MuJoCo, o de las tres cámaras de percepción.
+    cli.add_argument("--oracle-heightmap", action=argparse.BooleanOptionalAction,
+                     default=True)
     cli.add_argument(
         "--precise-com",
         action="store_true",
         help="inclina la muñeca en varias poses en vez de una lectura a plomo",
     )
-    cli.add_argument("--naive-planner", action="store_true")
-    cli.add_argument("--score-planner", action="store_true",
-                     help="usa heuristic.ScorePlanner cuando su equipo lo implemente")
+    cli.add_argument("--naive-planner", action="store_true",
+                     help="relleno en rejilla: la línea base, y marca el run como oráculo")
+    cli.add_argument("--beam-planner", action="store_true",
+                     help="el beam search de tools/stable_pallet, para comparar contra él")
     return cli
 
 
@@ -90,19 +95,30 @@ def _select_level(cli: argparse.ArgumentParser, args, cfg: dict) -> int:
 def _parts(args, cfg: dict):
     detector = OracleDetector() if args.oracle_vision else CameraDetector()
     gauge = OracleGauge() if args.oracle_gauge else WristGauge(precise=args.precise_com)
+    # La heurística de score es el DEFECTO. Los otros dos existen para compararse contra
+    # ella: `GridPlanner` es la línea base tonta y `BeamPlanner` el beam search medido.
     if args.naive_planner:
         planner = GridPlanner(cfg)
-    elif args.score_planner:
-        planner = ScorePlanner(cfg)
-    else:
+    elif args.beam_planner:
         planner = BeamPlanner(cfg)
-    oracle = oracle_for(args.oracle_vision, args.oracle_gauge, args.naive_planner)
+    else:
+        planner = ScorePlanner(cfg)
+    oracle = oracle_for(args.oracle_vision, args.oracle_gauge, args.naive_planner,
+                        args.oracle_heightmap)
     return detector, gauge, planner, oracle
 
 
-def oracle_for(oracle_vision: bool, oracle_gauge: bool, naive_planner: bool) -> bool:
-    """El run es oráculo si cualquiera de sus tres piezas es un stub."""
-    return any((oracle_vision, oracle_gauge, naive_planner))
+def oracle_for(oracle_vision: bool, oracle_gauge: bool, naive_planner: bool,
+               oracle_heightmap: bool = True) -> bool:
+    """El run es oráculo si cualquiera de sus piezas es un stub.
+
+    El mapa de alturas cuenta como una pieza más: leerlo de las poses de MuJoCo es hacer
+    trampa igual que leer el catálogo en vez de medir el paquete. Tiene bandera propia
+    porque es un sensor distinto del de la estación de recogida —uno mira el palé y el
+    otro la cinta—, y porque `vision/detect.py` sigue sin implementar: sin separarlos, el
+    mapa medido con cámaras sería código inalcanzable.
+    """
+    return any((oracle_vision, oracle_gauge, naive_planner, oracle_heightmap))
 
 
 def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
@@ -113,7 +129,19 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
         )
     import mujoco.viewer
 
-    with mujoco.viewer.launch_passive(scene.model, scene.data) as viewer:
+    def on_key(keycode: int) -> None:
+        # `m` enciende y apaga la rejilla del mapa de alturas. GLFW manda la letra en
+        # mayúscula, así que se comparan las dos y no dependemos de si hay bloq mayús.
+        if keycode not in (ord("m"), ord("M")):
+            return
+        scene.show_heightmap = not getattr(scene, "show_heightmap", False)
+        last = getattr(scene, "last_heightmap", None)
+        if last is not None:
+            draw_heightmap(scene, last)
+
+    with mujoco.viewer.launch_passive(
+        scene.model, scene.data, key_callback=on_key
+    ) as viewer:
         scene.viewer = viewer
         try:
             return run_episode(
@@ -167,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     _, _, _, oracle = _parts(args, cfg)
     first_scene.oracle = oracle
+    # De dónde sale el mapa de alturas: con esto puesto, de las poses de MuJoCo; sin
+    # ello, de las tres cámaras de percepción.
+    first_scene.oracle_heightmap = args.oracle_heightmap
     log = RunLog(
         REPO,
         task="palletizing",
@@ -185,7 +216,13 @@ def main(argv: list[str] | None = None) -> int:
         _log(args, f"telemetría: ACTIVA · {log.path_in_ui}")
     else:
         _log(args, "telemetría: solo disco · faltan credenciales SUPABASE")
+    # Qué planificador corre va en la línea de arranque por el mismo motivo que la
+    # telemetría: dos ejecuciones que se comparan entre sí tienen que poder distinguirse
+    # mirando la salida, no recordando qué banderas se pusieron.
+    _, _, chosen, _ = _parts(args, cfg)
     _log(args, f"modo: {'oráculo' if oracle else 'sin oráculo'} · "
+               f"{type(chosen).__name__} · "
+               f"mapa {'oráculo' if args.oracle_heightmap else 'de cámaras'} · "
                f"{first_scene.level.name} · {args.episodes} episodio(s)")
 
     ok = 0
@@ -203,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             detector, gauge, planner, oracle = _parts(args, cfg)
             scene.oracle = oracle
+            scene.oracle_heightmap = args.oracle_heightmap
             sink = RunLogSink(log, scene) if log.run_id else None
             if sink is not None:
                 sink.begin(seed)

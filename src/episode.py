@@ -9,9 +9,25 @@ import numpy as np
 from src import measure
 from src.cell.arm import ArmController
 from src.cell.conveyor import make_supply
+from src.cell import render as render_module
 from src.cell.render import Snapshot, render
-from src.contracts import Detector, Gauge, PackageSpec, PlacementPlan, Planner, Sink
-from src.planner.naive import measured_heightmap
+from src.contracts import (
+    Detector, Gauge, Heightmap, PackageSpec, PlacementPlan, Planner, Sink,
+)
+from src.planner import heightmap as pallet_surface
+
+
+def _heightmap(scene) -> Heightmap:
+    """El mapa de alturas de esta pasada, medido como toque.
+
+    Con `--oracle-heightmap` se lee de las poses de MuJoCo; sin él, de las tres cámaras
+    de percepción. Tiene bandera propia y cuenta para `oracle` del run: un run con el
+    mapa oráculo NO es un run con percepción, y marcarlo mal invalida justo la
+    comparación que justifica el trabajo.
+    """
+    if getattr(scene, "oracle_heightmap", True):
+        return pallet_surface.measure_ground_truth(scene)
+    return pallet_surface.measure(scene)
 
 
 @dataclass
@@ -109,15 +125,11 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
             grip_capacity_ratio=round(arm.grasp.capacity_ratio, 2) if arm.grasp else 0.0,
         )
 
-        heightmap = measured_heightmap(scene)
-        centered = PackageSpec(
-            package_id=spec.package_id,
-            type_name=spec.type_name,
-            dims_m=spec.dims_m,
-            mass_kg=spec.mass_kg,
-            cog_offset_m=np.zeros(3),
-        )
-        planner.choose(centered, heightmap)
+        heightmap = _heightmap(scene)
+        # Para que la tecla `m` tenga algo que pintar, y para que lo pintado sea el mapa
+        # con el que se acaba de decidir, no uno de hace tres cajas.
+        scene.last_heightmap = heightmap
+        render_module.draw_heightmap(scene, heightmap)
         forecast = (
             gauge.forecast(scene, supply.forecast(scene))
             if hasattr(gauge, "forecast") else []
@@ -141,12 +153,14 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
             score=round(plan.score, 4),
             breakdown=plan.breakdown,
             heightmap_top_mm=round(heightmap.top * 1000, 1),
+            # Cuánto del palé vieron las cámaras. Con el oráculo es 1.0 por definición.
+            observed_pct=round(heightmap.observed_ratio, 4),
         )
 
         if len(episode.plans) > 1 and plan.layer > episode.plans[-2].layer:
             _shoot(episode, scene, arm, attempt - 1, sink)
 
-        failure, drift = _place(arm, scene, box, spec, plan, episode.attempted)
+        failure, drift = _place(arm, scene, box, spec, plan, episode.attempted, heightmap)
         if failure and arm.is_holding():
             _return_to_source(arm, scene, box, observation)
         supply.release(scene)
@@ -159,7 +173,12 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
     _finish(episode, scene, arm, sink)
     episode.duration_s = round(float(scene.clock), 2)
     if episode.failure:
-        _event(episode, scene, sink, "fail", None, cause=episode.failure)
+        # `reject` sólo lo llena el planificador cuando no encontró hueco, y es la
+        # diferencia entre "no cabe" —que cierra el palé— y "el brazo ya no llega" —que
+        # dice que el palé está mal colocado respecto al robot—. En el payload sobrar es
+        # inocuo, así que va siempre que se sepa.
+        _event(episode, scene, sink, "fail", None, cause=episode.failure,
+               reject=getattr(planner, "last_reject", None))
     return episode
 
 
@@ -217,8 +236,14 @@ def _return_to_source(arm: ArmController, scene, box, observation) -> None:
 
 
 def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPlan,
-           watched: list) -> tuple[str | None, float]:
-    """Deposita, asienta, mide deriva y retira el brazo en cartesiano."""
+           watched: list, heightmap: Heightmap) -> tuple[str | None, float]:
+    """Deposita, asienta, mide deriva y retira el brazo en cartesiano.
+
+    Recibe el mapa que ya se midió para planificar en vez de medirlo otra vez: una sola
+    medida por paquete, y planificación y ejecución mirando la misma superficie. Con
+    percepción eso importa —dos medidas no tienen por qué coincidir— y el
+    `stack_clearance` de 0.22 m cubre de sobra lo que la oclusión pueda subestimar.
+    """
     motion = scene.cfg["motion"]
     target_z = (
         float(plan.position[2]) + spec.dims_m[2] / 2 + arm.cup_gap
@@ -227,7 +252,7 @@ def _place(arm: ArmController, scene, box, spec: PackageSpec, plan: PlacementPla
     safe_z = max(
         float(motion["transit_height"]),
         target_z + float(motion["place_clearance"]),
-        scene.deck_z + measured_heightmap(scene).top + float(motion["stack_clearance"]),
+        scene.deck_z + heightmap.top + float(motion["stack_clearance"]),
     )
     current = arm.tcp_pose().position
     if not arm.go_to(current[0], current[1], safe_z, plan.yaw):

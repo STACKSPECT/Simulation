@@ -46,6 +46,98 @@ class Snapshot:
     image: np.ndarray
 
 
+# Cuántos prismas como mucho se pintan para el mapa de alturas. La rejilla real es de
+# 120x80 = 9600 celdas y el `user_scn` del visor no da para tanto, así que se submuestrea
+# hasta caber. Es una ayuda para mirar, no una medida: lo medido va en la telemetría.
+HEIGHTMAP_BUDGET = 900
+
+
+def silence_com_markers(viewer, mujoco) -> None:
+    """Apaga las esferas blancas del centro de masas del visor.
+
+    **`m` ya era un atajo de MuJoCo**: el visor tiene una letra asignada a cada bandera
+    de visualización y `M` es "Center of Mass", que pinta una esfera blanca en el CoM de
+    cada cuerpo. Las veintiséis letras están cogidas, así que la rejilla no tiene ninguna
+    libre donde meterse; lo que se hace es quedarse con la tecla y dejar la bandera de
+    MuJoCo apagada, en vez de compartirla y que las dos se desincronicen —que es
+    exactamente lo que pasaba: una pulsación encendía las esferas y apagaba la rejilla—.
+
+    Se llama en cada sincronización, no sólo al pulsar, porque el visor procesa su propia
+    tecla al margen de este callback y no hay forma de saber quién va primero.
+    """
+    opt = getattr(viewer, "opt", None)
+    if opt is None:
+        return
+    opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
+
+
+def draw_heightmap(scene, heightmap) -> None:
+    """Pinta el mapa de alturas en el visor. La tecla `m` lo enciende y lo apaga.
+
+    Un prisma por celda, de la altura que la celda dice. Verde abajo, rojo arriba, y las
+    celdas que ninguna cámara vio en azul translúcido: ésas guardan altura 0 y NO son
+    cubierta libre, que es justo lo que no se ve de ninguna otra forma.
+
+    No hace nada sin visor, así que es seguro llamarlo siempre.
+    """
+    viewer = getattr(scene, "viewer", None)
+    if viewer is None:
+        return
+    mujoco = scene.mujoco
+    silence_com_markers(viewer, mujoco)
+    scn = viewer.user_scn
+    scn.ngeom = 0
+    if not getattr(scene, "show_heightmap", False):
+        viewer.sync()
+        return
+
+    cells = heightmap.cells
+    observed = heightmap.observed
+    ny, nx = cells.shape
+    cell = float(heightmap.cell_size)
+    origin_x, origin_y = heightmap.origin
+    budget = min(HEIGHTMAP_BUDGET, int(scn.maxgeom))
+    step = 1
+    while (nx // step) * (ny // step) > budget:
+        step += 1
+    side = cell * step
+    ceiling = max(float(scene.cfg["heuristic"]["max_stack_height"]), 1e-6)
+
+    identity = np.eye(3, dtype=np.float64).reshape(9)
+    count = 0
+    for j in range(0, ny - step + 1, step):
+        for i in range(0, nx - step + 1, step):
+            if count >= budget:
+                break
+            patch = cells[j:j + step, i:i + step]
+            height = float(patch.max())
+            seen = True if observed is None else bool(observed[j:j + step, i:i + step].any())
+            # Una celda sin observar se dibuja como una lámina fina sobre la cubierta: lo
+            # que importa de ella no es su altura, es que no se sabe.
+            thickness = max(height, 0.004) if seen else 0.004
+            ratio = min(height / ceiling, 1.0)
+            rgba = (ratio, 1.0 - ratio, 0.15, 0.40) if seen else (0.15, 0.35, 1.0, 0.55)
+            mujoco.mjv_initGeom(
+                scn.geoms[count],
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                # El 0.92 deja una junta entre celdas vecinas. Sin él las caras laterales
+                # de dos celdas contiguas caen en el mismo plano, el z-buffer no sabe
+                # cuál va delante y la malla sale moteada de puntos claros que parpadean
+                # al girar la cámara. Con la junta se ve la rejilla y no parpadea nada.
+                size=np.array([side * 0.46, side * 0.46, thickness / 2]),
+                pos=np.array([
+                    origin_x + (i + step / 2) * cell,
+                    origin_y + (j + step / 2) * cell,
+                    scene.deck_z + thickness / 2,
+                ]),
+                mat=identity,
+                rgba=np.array(rgba, dtype=np.float32),
+            )
+            count += 1
+    scn.ngeom = count
+    viewer.sync()
+
+
 def render(scene, view: str) -> np.ndarray:
     """Un fotograma RGB desde la cámara `view`, con el palé ya asentado.
 
