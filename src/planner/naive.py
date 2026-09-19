@@ -13,6 +13,7 @@ import math
 import numpy as np
 
 from src.contracts import Heightmap, PackageSpec, PlacementPlan
+from src.planner.heightmap import measure_ground_truth
 from tools.stable_pallet.models import (
     Package as ToolPackage,
     Pallet as ToolPallet,
@@ -35,43 +36,9 @@ def _overlap(a, b) -> float:
     return max(0.0, x1 - x0) * max(0.0, y1 - y0)
 
 
-def measured_heightmap(scene) -> Heightmap:
-    """Adaptador temporal mientras ``planner.heightmap`` siga sin implementar.
-
-    Se mantiene aquí porque este fichero es la única pieza de planificación incluida en
-    la migración. El mapa se mide de la física en cada ciclo; no es un contador.
-    """
-    cell = float(scene.cfg["heuristic"]["cell_size"])
-    width, depth = scene.pallet_dims
-    center_x, center_y = scene.pallet_center
-    nx, ny = math.ceil(width / cell), math.ceil(depth / cell)
-    origin = (center_x - width / 2, center_y - depth / 2)
-    cells = np.zeros((ny, nx), dtype=float)
-    measured = []
-    for box in scene.boxes:
-        position, _ = scene.box_pose(box.index)
-        if position[2] < scene.deck_z:
-            continue
-        measured.append((float(position[2] - box.dims_m[2] / 2), box, position))
-    for bottom, box, position in sorted(measured, key=lambda item: item[0]):
-        yaw = scene.box_yaw(box.index)
-        cosine, sine = abs(math.cos(yaw)), abs(math.sin(yaw))
-        span_x = box.dims_m[0] * cosine + box.dims_m[1] * sine
-        span_y = box.dims_m[0] * sine + box.dims_m[1] * cosine
-        x0 = max(0, math.floor((position[0] - span_x / 2 - origin[0]) / cell))
-        x1 = min(nx, math.ceil((position[0] + span_x / 2 - origin[0]) / cell))
-        y0 = max(0, math.floor((position[1] - span_y / 2 - origin[1]) / cell))
-        y1 = min(ny, math.ceil((position[1] + span_y / 2 - origin[1]) / cell))
-        if x0 >= x1 or y0 >= y1:
-            continue
-        # Una caja de la mesa o en la mano puede proyectarse sobre el borde del palé,
-        # pero no forma parte del montón si no apoya en la altura ya medida.
-        support = cells[y0:y1, x0:x1]
-        if bottom > scene.deck_z + float(support.max(initial=0.0)) + 0.02:
-            continue
-        top = max(0.0, float(position[2] + box.dims_m[2] / 2 - scene.deck_z))
-        cells[y0:y1, x0:x1] = np.maximum(cells[y0:y1, x0:x1], top)
-    return Heightmap(cells=cells, origin=origin, cell_size=cell)
+# El mapa de alturas ya vive donde le toca, en `planner/heightmap.py`. Se re-exporta
+# aquí para no romper a quien lo importaba de este fichero cuando era su casa temporal.
+measured_heightmap = measure_ground_truth
 
 
 class GridPlanner:
@@ -157,7 +124,7 @@ class GridPlanner:
                                 for item in same
                             ) / (width * depth),
                         )
-                        if support < float(self.cfg["heuristic"]["min_support"]):
+                        if support < float(self.cfg["heuristic"]["min_support_ratio"]):
                             continue
                         layer = 1 + sum(level < z - 0.003 for level in levels)
                         return PlacementPlan(

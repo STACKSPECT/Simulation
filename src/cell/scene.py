@@ -772,12 +772,29 @@ def _industrial_xml(simplified: bool) -> str:
     return f"{posts}\n{rails}\n{markings}"
 
 
-def _cameras_xml(cfg: dict) -> str:
-    """Las cuatro vistas, declaradas con `position`/`lookat` y convertidas aquí.
+def _camera_xml(name: str, spec: dict) -> str:
+    quat = lookat_quat(spec["position"], spec["lookat"], spec.get("up", (0.0, 0.0, 1.0)))
+    position = " ".join(str(value) for value in spec["position"])
+    return (
+        f'    <camera name="{name}" pos="{position}" '
+        f'quat="{quat[0]:.6f} {quat[1]:.6f} {quat[2]:.6f} {quat[3]:.6f}" '
+        f'fovy="{spec["fovy"]}"/>'
+    )
 
-    LOS NOMBRES SON UN VOCABULARIO CERRADO: `top | side | iso | camera`. Con otro nombre
-    el PNG sube a Storage y LUEGO la base rechaza la fila con un 23514: la foto queda
-    huérfana y la traza sin imagen. Al repo anterior le pasó con `front`.
+
+def _cameras_xml(cfg: dict) -> str:
+    """Las vistas de la escena: las cuatro que suben fotos y las de percepción.
+
+    LOS NOMBRES DE `cameras:` SON UN VOCABULARIO CERRADO: `top | side | iso | camera`.
+    Con otro nombre el PNG sube a Storage y LUEGO la base rechaza la fila con un 23514:
+    la foto queda huérfana y la traza sin imagen. Al repo anterior le pasó con `front`.
+
+    Las de `perception.rig:` —las dos diagonales— NO pasan por ese vocabulario, y por eso
+    viven en otro bloque: no suben ninguna foto, sólo alimentan la fusión de profundidad
+    de `planner/heightmap.py`. La cenital es la MISMA `top` de arriba, compartida a
+    propósito: percepción y plataforma quieren el mismo punto de vista, y dos cenitales
+    que se van separando con los años acaban en una foto y un mapa que no se
+    corresponden.
     """
     from src.cell.render import VIEWS
 
@@ -788,13 +805,14 @@ def _cameras_xml(cfg: dict) -> str:
                 f"cámara {name!r} fuera del vocabulario {VIEWS}. Con otro nombre la foto "
                 f"sube a Storage y la base rechaza la fila con un 23514."
             )
-        quat = lookat_quat(spec["position"], spec["lookat"], spec.get("up", (0.0, 0.0, 1.0)))
-        position = " ".join(str(value) for value in spec["position"])
-        out.append(
-            f'    <camera name="{name}" pos="{position}" '
-            f'quat="{quat[0]:.6f} {quat[1]:.6f} {quat[2]:.6f} {quat[3]:.6f}" '
-            f'fovy="{spec["fovy"]}"/>'
-        )
+        out.append(_camera_xml(name, spec))
+    for name, spec in cfg.get("perception", {}).get("rig", {}).items():
+        if name in cfg["cameras"]:
+            raise ValueError(
+                f"la cámara de percepción {name!r} pisa a una de `cameras:`. Si lo que "
+                f"quieres es compartirla, ponla sólo en `perception.cameras`."
+            )
+        out.append(_camera_xml(name, spec))
     return "\n".join(out)
 
 

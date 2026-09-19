@@ -13,14 +13,19 @@ sys.path.insert(0, str(REPO))
 import numpy as np  # noqa: E402
 from theker_telemetry import FAILURES  # noqa: E402
 
+from placing import METRIC_NAMES  # noqa: E402
 from scripts.palletize import oracle_for  # noqa: E402
 from src import measure  # noqa: E402
-from src.cell.render import VIEWS  # noqa: E402
+from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
 from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
+from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.planner.naive import BeamPlanner, GridPlanner  # noqa: E402
 from src.telemetry import pallet_state_row, placement_row, run_config  # noqa: E402
+from src.vision.surface import (  # noqa: E402
+    CameraIntrinsics, CameraPose, fuse_max, rasterize_points, unproject_depth,
+)
 
 CFG = load_configs(REPO)
 EVENT_KINDS = {"perceive", "plan", "pick", "place", "settle", "fail"}
@@ -82,13 +87,216 @@ def test_level_ids_encode_the_source() -> None:
         assert level.id // 10 == SOURCE_DECADE[level.source]
 
 
-def test_score_weights_sum_to_one() -> None:
-    for name in ("heuristic", "planner"):
-        assert abs(sum(CFG[name]["weights"].values()) - 1.0) < 1e-9
+def test_beam_weights_sum_to_one() -> None:
+    assert abs(sum(CFG["planner"]["weights"].values()) - 1.0) < 1e-9
+
+
+def test_heuristic_weights_are_the_fourteen_terms() -> None:
+    """Los de `placing` NO suman 1, y no tienen que hacerlo.
+
+    El score se normaliza dividiendo por la suma de pesos, así que lo que hay que anclar
+    es que están los catorce y ninguno negativo. Una clave mal escrita aquí no da error:
+    `weight_vector()` la rellena con 0.0 y el término se apaga en silencio.
+    """
+    weights = CFG["heuristic"]["weights"]
+    assert set(weights) == set(METRIC_NAMES), set(weights) ^ set(METRIC_NAMES)
+    assert all(value >= 0.0 for value in weights.values())
+
+
+def _empty_pallet_map() -> Heightmap:
+    """Un palé vacío con la rejilla y el origen de verdad de esta celda."""
+    cell = float(CFG["heuristic"]["cell_size"])
+    length, width = (float(v) for v in CFG["pallet"]["dims"])
+    center_x, center_y = (float(v) for v in CFG["pallet"]["center"])
+    nx, ny = round(length / cell), round(width / cell)
+    return Heightmap(
+        cells=np.zeros((ny, nx)),
+        origin=(center_x - length / 2, center_y - width / 2),
+        cell_size=cell,
+    )
+
+
+def test_the_adapter_translates_degrees_and_the_deck() -> None:
+    """Las dos traducciones que fallan en SILENCIO: yaw y el convenio de alturas.
+
+    `placing` habla grados y Z del mundo; este repo, radianes y metros sobre la cubierta.
+    Ninguna de las dos peta si se olvida: las cajas acaban giradas 57° o flotando (o
+    hundidas) exactamente la cota de la cubierta.
+    """
+    planner = ScorePlanner(CFG)
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+
+    # Una caja mucho más larga que ancha sólo cabe girada en un palé estrecho: así se
+    # fuerza un yaw de 90° sin tener que adivinar cuál elige la heurística.
+    narrow = Heightmap(cells=np.zeros((60, 40)), origin=(0.0, -0.20), cell_size=0.01)
+    plan = ScorePlanner(CFG).choose(
+        PackageSpec("b", "std_m", (0.55, 0.20, 0.10), 2.0, np.zeros(3)), narrow
+    )
+    assert plan is not None
+    assert abs(plan.yaw - np.pi / 2) < 1e-9, f"yaw={plan.yaw} no son 90° en radianes"
+
+    # Altura de mapa 0 = la cubierta del palé, no el suelo.
+    plan = planner.choose(
+        PackageSpec("b", "std_m", (0.42, 0.30, 0.18), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is not None
+    z_base = float(plan.position[2]) - 0.18 / 2
+    assert abs(z_base - deck_z) < 1e-6, f"z_base={z_base} debería ser deck_z={deck_z}"
+
+
+def test_the_chosen_pose_lands_on_the_pallet() -> None:
+    """Ida y vuelta de tipos: si el origen o la celda se traducen mal, se sale y se ve."""
+    heightmap = _empty_pallet_map()
+    dims = (0.42, 0.30, 0.18)
+    plan = ScorePlanner(CFG).choose(
+        PackageSpec("b", "std_m", dims, 4.2, np.zeros(3)), heightmap
+    )
+    assert plan is not None
+    ny, nx = heightmap.cells.shape
+    x0, y0 = heightmap.origin
+    x1 = x0 + nx * heightmap.cell_size
+    y1 = y0 + ny * heightmap.cell_size
+    half_x, half_y = (dims[1] / 2, dims[0] / 2) if abs(plan.yaw) > 0.1 else (dims[0] / 2, dims[1] / 2)
+    assert x0 - 1e-9 <= plan.position[0] - half_x and plan.position[0] + half_x <= x1 + 1e-9
+    assert y0 - 1e-9 <= plan.position[1] - half_y and plan.position[1] + half_y <= y1 + 1e-9
+
+
+def test_score_planner_returns_none_and_says_why() -> None:
+    """Que no quepa es un resultado, no una excepción — y el porqué se registra."""
+    planner = ScorePlanner(CFG)
+    plan = planner.choose(
+        PackageSpec("gigante", "std_m", (2.0, 2.0, 0.2), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is None
+    # Ni un candidato generado: no cabe ni en un palé vacío. `{}` NO es lo mismo que
+    # "todos rechazados", y la diferencia es la que dice qué hacer con la caja.
+    assert planner.last_reject == {}
+
+    plan = planner.choose(
+        PackageSpec("b", "std_m", (0.42, 0.30, 0.18), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is not None
+    assert 0.0 <= plan.score <= 1.0
+    assert set(plan.breakdown) == set(METRIC_NAMES)
+    assert planner.last_reject is None
+
+
+def test_record_reads_the_pallet_frame_and_groups_the_layer() -> None:
+    """`measure.Placement.position` va en el frame del PALÉ, no en el del mundo.
+
+    Las dos formas de equivocarse aquí no dan error, sólo números plausibles:
+
+      - Restarle `deck_z` a una Z que ya está sobre la cubierta deja los niveles en
+        −0.144, y entonces una caja puesta en la cubierta sale como capa 2. `measure` le
+        busca apoyo en la capa 1 en vez de en el palé y la traza dice 0 % de apoyo sobre
+        un montón perfectamente plano.
+      - Agrupar los niveles con `set()` en vez de con tolerancia cuenta cada caja de la
+        misma capa como un nivel propio, y la capa sube de una en una.
+    """
+    planner = ScorePlanner(CFG)
+    # Dos cajas asentadas en la cubierta, a alturas que difieren en micras.
+    for dz in (0.0, 4e-6):
+        planner.record(_placement(0.1, 0.1))
+        planner._levels[-1] = 0.18 / 2 - 0.18 / 2 + dz    # base 0 en el frame del palé
+    assert max(abs(level) for level in planner._levels) < 1e-5, planner._levels
+
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+    assert planner._layer(deck_z) == 1                    # en la cubierta
+    assert planner._layer(deck_z + 0.18) == 2             # encima de esas dos: capa 2
+    planner._levels.append(0.18)
+    assert planner._layer(deck_z + 0.36) == 3
+
+
+def test_the_m_key_draws_the_height_map_grid() -> None:
+    """La rejilla del visor: se enciende, cabe en el presupuesto y marca lo no observado.
+
+    Sin visor no hace nada —por eso se puede llamar siempre—; con visor pinta un prisma
+    por celda submuestreada, y las celdas que ninguna cámara vio salen con otro color,
+    que es la única forma de verlas: guardan altura 0 igual que la cubierta libre.
+    """
+    geoms = [SimpleNamespace(rgba=np.zeros(4), pos=np.zeros(3)) for _ in range(2000)]
+    viewer = SimpleNamespace(
+        user_scn=SimpleNamespace(ngeom=0, maxgeom=2000, geoms=geoms),
+        sync=lambda: None,
+    )
+
+    def init_geom(geom, *, type, size, pos, mat, rgba):
+        geom.rgba = np.asarray(rgba, dtype=float)
+        geom.pos = np.asarray(pos, dtype=float)
+
+    fake_mujoco = SimpleNamespace(
+        mjv_initGeom=init_geom,
+        mjtGeom=SimpleNamespace(mjGEOM_BOX=6),
+    )
+    heightmap = _empty_pallet_map()
+    observed = np.ones(heightmap.cells.shape, dtype=bool)
+    observed[:20, :20] = False
+    heightmap = Heightmap(heightmap.cells, heightmap.origin, heightmap.cell_size, observed)
+    scene = SimpleNamespace(viewer=viewer, mujoco=fake_mujoco, cfg=CFG,
+                            deck_z=float(CFG["pallet"]["deck_thickness"]),
+                            show_heightmap=False)
+
+    draw_heightmap(scene, heightmap)
+    assert viewer.user_scn.ngeom == 0, "apagado no pinta nada"
+
+    scene.show_heightmap = True                      # esto es lo que hace la tecla `m`
+    draw_heightmap(scene, heightmap)
+    painted = viewer.user_scn.ngeom
+    assert 0 < painted <= HEIGHTMAP_BUDGET, painted
+    colours = {tuple(np.round(geoms[i].rgba, 3)) for i in range(painted)}
+    assert len(colours) == 2, f"observado y no observado deberían distinguirse: {colours}"
+    # Y todo cae sobre la huella del palé, no en el suelo de al lado.
+    x0, y0 = heightmap.origin
+    ny, nx = heightmap.cells.shape
+    for i in range(painted):
+        assert x0 <= geoms[i].pos[0] <= x0 + nx * heightmap.cell_size
+        assert y0 <= geoms[i].pos[1] <= y0 + ny * heightmap.cell_size
+        assert geoms[i].pos[2] >= scene.deck_z
+
+    scene.viewer = None
+    draw_heightmap(scene, heightmap)                 # sin visor: ni pincha ni corta
+
+
+def test_depth_fuses_into_the_height_map() -> None:
+    """La fusión, sin MuJoCo: un fotograma sintético cae en la celda que le toca.
+
+    Cámara cenital a 2 m mirando hacia abajo sobre un palé de 0.20x0.20. La mitad de la
+    imagen ve una tapa a 0.30 m y la otra mitad la cubierta a 0.144. Lo que NO se ve
+    tiene que quedar `observed=False`, que es la diferencia entre "no hay nada" y "no
+    lo sé", y es justo lo que el oráculo no puede decir.
+    """
+    width = height = 128
+    fovy, cam_z, surface_z = 45.0, 0.60, 0.30
+    fy = height / (2.0 * np.tan(np.deg2rad(fovy) / 2.0))
+    intrinsics = CameraIntrinsics(fx=fy, fy=fy, cx=(width - 1) / 2, cy=(height - 1) / 2,
+                                  width=width, height=height, fovy_deg=fovy)
+    # Cenital: la cámara mira por su −Z, que con esta rotación es el −Z del mundo.
+    pose = CameraPose(pos=np.array([0.10, 0.10, cam_z]), rot=np.eye(3))
+    depth = np.full((height, width), cam_z - surface_z, dtype=np.float32)
+    # Una franja central que ninguna cámara ve. Va en el medio a propósito: cae DENTRO
+    # de la huella del palé, que es donde la distinción importa. Y tiene que ser MÁS
+    # ANCHA que una celda (≈1.9 mm por fila aquí, celda de 20 mm) o las filas de al lado
+    # rellenan la celda igual y el hueco no llega a existir.
+    depth[52:78, :] = np.nan
+
+    points = unproject_depth(depth, intrinsics, pose, min_upward_nz=0.45)
+    hmap = rasterize_points(points, origin_xy=(0.0, 0.0), length=0.20, width=0.20,
+                            resolution=0.02, z_min=-0.005, z_max=2.5)
+    fused = fuse_max([hmap, hmap])               # fusionar consigo mismo no cambia nada
+
+    seen = fused.heights[fused.observed]
+    assert seen.size, "no se observó ni una celda"
+    assert np.allclose(seen, surface_z, atol=0.005), (float(seen.min()), float(seen.max()))
+    assert not fused.observed.all(), "la franja NaN tendría que quedar sin observar"
+    # Altura 0 y sin observar NO es lo mismo que cubierta libre: es lo que aporta medir.
+    assert np.all(fused.heights[~fused.observed] == 0.0)
 
 
 def test_oracle_is_any_stub_for_every_combination() -> None:
-    for flags in itertools.product((False, True), repeat=3):
+    for flags in itertools.product((False, True), repeat=4):
         assert oracle_for(*flags) is any(flags)
 
 
