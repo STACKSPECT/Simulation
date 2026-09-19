@@ -6,12 +6,14 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stable_pallet import runner as runner_module
 from stable_pallet import webapp
-from stable_pallet.runner import is_viewer_noise
+from stable_pallet.runner import interpreter, is_viewer_noise
 from stable_pallet.webapp import LISTENER_BACKLOG, Session, _catalogue, _Server
 
 
@@ -308,3 +310,56 @@ def test_the_compositor_complaints_are_kept_out_of_the_log() -> None:
 def test_a_real_error_still_reaches_the_log() -> None:
     assert not is_viewer_noise("Traceback (most recent call last):")
     assert not is_viewer_noise("ValueError: no stable placement for package 4")
+
+
+@pytest.fixture
+def venv_bin(tmp_path: Path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("python", "mjpython"):
+        (bin_dir / name).touch()
+    return bin_dir
+
+
+def test_on_macos_a_run_with_a_window_goes_through_mjpython(venv_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.platform", "darwin")
+    assert interpreter(True, venv_bin / "python") == str(venv_bin / "mjpython")
+
+
+def test_a_run_without_a_window_or_off_macos_keeps_plain_python(venv_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.platform", "darwin")
+    assert interpreter(False, venv_bin / "python") == str(venv_bin / "python")
+    monkeypatch.setattr("sys.platform", "linux")
+    assert interpreter(True, venv_bin / "python") == str(venv_bin / "python")
+
+
+def test_macos_without_mjpython_falls_back_to_python(venv_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (venv_bin / "mjpython").unlink()
+    monkeypatch.setattr("sys.platform", "darwin")
+    assert interpreter(True, venv_bin / "python") == str(venv_bin / "python")
+
+
+def test_both_launchers_ask_for_the_window_interpreter(venv_bin: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[list[str]] = []
+
+    class FakeProcess:
+        stdout = stderr = iter(())
+
+        def poll(self) -> int:
+            return 0
+
+    def fake_popen(argv: list[str], **_: Any) -> FakeProcess:
+        started.append(argv)
+        return FakeProcess()
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr("sys.executable", str(venv_bin / "python"))
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr(runner_module.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(webapp, "REPO", venv_bin.parent)
+
+    runner_module.RunnerClient({"viewer": True}, lambda message: None)
+    webapp.PalletizeClient({"source": "table", "level": 11, "speed": 1.0, "viewer": True}, lambda message: None)
+    runner_module.RunnerClient({"viewer": False}, lambda message: None)
+
+    assert [argv[0] for argv in started] == [str(venv_bin / "mjpython")] * 2 + [str(venv_bin / "python")]

@@ -26,7 +26,6 @@ import json
 import mimetypes
 import queue
 import subprocess
-import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,7 +35,7 @@ from typing import Any
 import yaml
 
 from .controls import SPEED_PRESETS
-from .runner import RunnerClient
+from .runner import RunnerClient, interpreter
 
 STATIC = Path(__file__).parent / "web"
 REPO = Path(__file__).resolve().parents[2]
@@ -92,7 +91,7 @@ class PalletizeClient:
     def __init__(self, request: dict[str, Any], on_message: Any) -> None:
         python = REPO / ".venv" / "bin" / "python"
         argv = [
-            str(python if python.exists() else Path(sys.executable)),
+            interpreter(bool(request.get("viewer")), python if python.exists() else None),
             str(REPO / "scripts" / "palletize.py"),
             "--protocol", "json",
             "--source", str(request["source"]),
