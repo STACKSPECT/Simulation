@@ -84,6 +84,21 @@ body {
 
 .live { display: flex; align-items: center; gap: 12px; }
 
+.mode-badge {
+  padding: 6px 10px;
+  border: 1px solid rgba(41, 227, 122, .35);
+  border-radius: 999px;
+  color: var(--true);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: .08em;
+}
+
+.mode-badge[data-mode="debug"] {
+  color: var(--warn);
+  border-color: rgba(245, 211, 58, .4);
+}
+
 .status {
   padding: 7px 15px;
   border: 1px solid var(--line);
@@ -162,6 +177,15 @@ main {
 }
 
 .span-experiments { grid-area: experiments; min-height: 0; }
+.group-title {
+  margin: 12px 2px 7px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.group-title:first-child { margin-top: 0; }
+.mode-switch { grid-template-columns: 1fr 1fr; }
 .span-transport { grid-area: transport; }
 .span-log { grid-area: log; min-height: 0; }
 /* The settings scroll; the run buttons never do. Burying `Ejecutar` under a scrollbar

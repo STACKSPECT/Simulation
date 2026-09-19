@@ -14,6 +14,9 @@ const ui = {
   main: document.querySelector("main"),
   status: $("status"),
   link: $("link"),
+  modeBadge: $("mode-badge"),
+  modes: $("modes"),
+  modeNote: $("mode-note"),
   experiments: $("experiments"),
   experimentCount: $("experiment-count"),
   speeds: $("speeds"),
@@ -41,6 +44,7 @@ let experiments = [];
 let selected = null;
 let speedName = "x1";
 let speedValue = 1;
+let mode = "execution";
 let dragging = false;
 
 const IDLE = { running: false, frames: 0, index: null, paused: false, playback: "stopped", holding: false, activity: "" };
@@ -79,9 +83,14 @@ function command(message) {
 /* -- building the page ------------------------------------------------------------ */
 
 function renderExperiments() {
-  ui.experimentCount.textContent = `${experiments.length} preparados`;
-  ui.experiments.replaceChildren(
-    ...experiments.map((item) => {
+  ui.experimentCount.textContent = `${experiments.length} niveles`;
+  const nodes = [];
+  for (const source of ["table", "conveyor", "truck"]) {
+    const heading = document.createElement("h3");
+    heading.className = "group-title";
+    heading.textContent = { table: "Mesa", conveyor: "Cinta", truck: "Camión" }[source];
+    nodes.push(heading);
+    for (const item of experiments.filter((entry) => entry.source === source)) {
       const card = document.createElement("label");
       card.className = "card";
       card.dataset.key = item.key;
@@ -108,15 +117,18 @@ function renderExperiments() {
       }
 
       card.append(radio, title, text, tags);
-      return card;
-    }),
-  );
+      nodes.push(card);
+    }
+  }
+  ui.experiments.replaceChildren(...nodes);
 }
 
 function tagsFor(item) {
   const tags = [];
   if (item.watchable) tags.push(["ventana 3D", "tag-3d"]);
   if (item.usesRobot) tags.push(["brazo", "tag-robot"]);
+  if (item.source === "table") tags.push(["mesa", ""]);
+  if (item.source === "conveyor") tags.push(["cinta", ""]);
   if (item.source === "truck") tags.push(["cami\u00f3n", "tag-truck"]);
   if (item.instantPlace) tags.push(["colocado instant\u00e1neo", ""]);
   if (item.shake) tags.push(["sacudidas", "tag-shake"]);
@@ -156,6 +168,7 @@ async function start() {
   try {
     await post("/api/run", {
       experiment: selected.key,
+      mode,
       speed: speedValue,
       fast_forward: ui.fastForward.checked,
       show_true_com: ui.showTrue.checked,
@@ -196,11 +209,13 @@ function connect() {
     switch (message.kind) {
       case "hello":
         live = { ...live, ...message.state, running: message.running };
+        mode = message.mode || mode;
         ui.runTitle.textContent = message.title || "";
         setLog(message.log || []);
         break;
       case "started":
         live.running = true;
+        mode = message.mode || mode;
         ui.runTitle.textContent = message.title || "";
         setLog([{ text: `\u25b6 ${message.title}`, tone: "head" }]);
         break;
@@ -253,7 +268,7 @@ function refresh() {
   const recording = busy && live.frames > 0;
 
   ui.main.classList.toggle("busy", busy);
-  for (const card of ui.experiments.children) {
+  for (const card of ui.experiments.querySelectorAll(".card")) {
     const on = selected && card.dataset.key === selected.key;
     card.classList.toggle("on", Boolean(on));
     card.querySelector("input").checked = Boolean(on);
@@ -262,6 +277,15 @@ function refresh() {
   for (const button of ui.speeds.children) {
     button.classList.toggle("on", button.dataset.name === speedName);
   }
+  for (const button of ui.modes.children) {
+    button.classList.toggle("on", button.dataset.mode === mode);
+    button.disabled = busy;
+  }
+  ui.modeBadge.textContent = mode === "execution" ? "EJECUCIÓN" : "DEPURACIÓN · SIN TELEMETRÍA";
+  ui.modeBadge.dataset.mode = mode;
+  ui.modeNote.textContent = mode === "execution"
+    ? "Lanza scripts/palletize.py y publica telemetría si hay credenciales."
+    : "Usa el runner local de tools/stable_pallet. No abre episodios ni sube telemetría.";
 
   ui.viewer.disabled = busy || !selected?.watchable;
   ui.measureCom.disabled = busy || !selected?.usesRobot;
@@ -319,8 +343,8 @@ function statusText() {
     return [`Revisando la grabaci\u00f3n hacia ${live.playback === "forward" ? "delante" : "atr\u00e1s"}`, "pause"];
   }
   if (live.paused) return [`En pausa${live.index !== null ? " \u00b7 revisando la grabaci\u00f3n" : ""}`, "pause"];
-  const mode = ui.fastForward.checked ? "fast-forward" : "trayectorias completas";
-  return [`Ejecutando \u00b7 ${SPEED_LABELS[speedName]} \u00b7 ${mode}`, "run"];
+  const motion = ui.fastForward.checked ? "fast-forward" : "trayectorias completas";
+  return [`${mode === "execution" ? "Ejecución" : "Depuración"} \u00b7 ${SPEED_LABELS[speedName]} \u00b7 ${motion}`, "run"];
 }
 
 function setStatus(text, tone) {
@@ -340,6 +364,14 @@ for (const input of [ui.fastForward, ui.showTrue, ui.showEstimated]) {
 ui.run.addEventListener("click", start);
 ui.stop.addEventListener("click", stop);
 ui.pause.addEventListener("click", () => command({ command: live.paused ? "resume" : "pause" }));
+
+for (const button of ui.modes.children) {
+  button.addEventListener("click", () => {
+    if (live.running) return;
+    mode = button.dataset.mode;
+    refresh();
+  });
+}
 
 for (const button of ui.transport) {
   button.addEventListener("click", () => {

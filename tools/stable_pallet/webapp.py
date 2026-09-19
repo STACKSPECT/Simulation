@@ -5,9 +5,11 @@ the page keeps the switches that are safe to change live -- speed, fast-forward,
 centre-of-mass markers -- and a transport bar that pauses the cell and steps back
 through what has already happened.
 
-Three processes, each with one job:
+Three processes, each with one job. Execution uses the migrated entrypoint; debugging
+keeps the original local runner and never opens a telemetry episode:
 
-    browser  <--HTTP/SSE-->  this server  <--JSON over pipes-->  stable_pallet.runner
+    browser  <--HTTP/SSE-->  this server  <--JSON over pipes-->  scripts/palletize.py
+                                                        \---->  stable_pallet.runner
 
 Nothing in this module touches MuJoCo. It forwards control messages to the runner and
 republishes whatever the runner reports to every page that is listening, which is why
@@ -23,19 +25,21 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import subprocess
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .controls import SPEED_PRESETS
-from .experiments import EXPERIMENTS
 from .runner import RunnerClient
 
 STATIC = Path(__file__).parent / "web"
-FRAME_SECONDS = 0.05
-
+REPO = Path(__file__).resolve().parents[2]
 # A listener that has not been drained in this many events is a closed tab the socket
 # has not noticed yet. Dropping it is better than growing its queue forever.
 LISTENER_BACKLOG = 512
@@ -57,22 +61,89 @@ def _idle_state() -> dict[str, Any]:
 
 
 def _catalogue() -> list[dict[str, Any]]:
-    """The experiment list, as the page needs it."""
+    """Los nueve niveles declarados en YAML, agrupables por fuente."""
+    config = yaml.safe_load((REPO / "configs" / "pallet.yaml").read_text(encoding="utf-8"))
+    descriptions = {
+        "table": "Bultos preparados en mesa.",
+        "conveyor": "Banda física que entrega y se detiene.",
+        "truck": "Descarga del remolque de arriba abajo.",
+    }
     return [
         {
-            "key": item.key,
-            "title": item.title,
-            "description": item.description,
-            "kind": item.kind,
-            "source": item.source,
-            "watchable": item.watchable,
-            "usesRobot": item.uses_robot,
-            "shake": item.shake,
-            "instantPlace": item.instant_place,
-            "seed": item.seed,
+            "key": f"level-{row['id']}",
+            "title": row["name"],
+            "description": descriptions[row["source"]],
+            "kind": "level",
+            "source": row["source"],
+            "level": int(row["id"]),
+            "watchable": True,
+            "usesRobot": True,
+            "shake": False,
+            "instantPlace": False,
+            "seed": 1,
         }
-        for item in EXPERIMENTS
+        for row in config["levels"]
     ]
+
+
+class PalletizeClient:
+    """El entrypoint real, visto con el mismo protocolo de líneas que el runner local."""
+
+    def __init__(self, request: dict[str, Any], on_message: Any) -> None:
+        python = REPO / ".venv" / "bin" / "python"
+        argv = [
+            str(python if python.exists() else Path(sys.executable)),
+            str(REPO / "scripts" / "palletize.py"),
+            "--protocol", "json",
+            "--source", str(request["source"]),
+            "--level", str(request["level"]),
+            "-n", "1",
+        ]
+        if request.get("viewer"):
+            argv.append("--viewer")
+        if request.get("simplified_graphics"):
+            argv.append("--simplified-graphics")
+        argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
+        if request.get("seed") is not None:
+            argv.extend(("--seed", str(int(request["seed"]))))
+        self.on_message = on_message
+        self.process = subprocess.Popen(
+            argv, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, bufsize=1,
+        )
+        threading.Thread(target=self._read, args=(self.process.stdout,), daemon=True).start()
+        threading.Thread(target=self._read_errors, daemon=True).start()
+
+    def _read(self, pipe) -> None:
+        for line in iter(pipe.readline, ""):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self.on_message(json.loads(line))
+            except ValueError:
+                self.on_message({"kind": "log", "text": line})
+        self.on_message({"kind": "closed"})
+
+    def _read_errors(self) -> None:
+        for line in iter(self.process.stderr.readline, ""):
+            if line.strip():
+                self.on_message({"kind": "log", "text": line.rstrip()})
+
+    def is_running(self) -> bool:
+        return self.process.poll() is None
+
+    def send(self, **message: Any) -> None:
+        if message.get("command") == "cancel":
+            self.stop()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        if self.is_running():
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
 
 
 class Session:
@@ -81,10 +152,11 @@ class Session:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._listeners: set[queue.Queue[dict[str, Any]]] = set()
-        self.client: RunnerClient | None = None
+        self.client: RunnerClient | PalletizeClient | None = None
         self.state = _idle_state()
         self.log: list[dict[str, Any]] = []
         self.title: str = ""
+        self.mode: str = "debug"
 
     # -- listeners -------------------------------------------------------------------
 
@@ -100,6 +172,7 @@ class Session:
                     "state": dict(self.state),
                     "log": list(self.log),
                     "title": self.title,
+                    "mode": self.mode,
                 }
             )
         return stream
@@ -130,8 +203,10 @@ class Session:
         # is looking at.
         self.log = [{"text": f"\u25b6 {title}", "tone": "head"}]
         self.title = title
-        self.publish({"kind": "started", "title": title})
-        self.client = RunnerClient(request, self._on_runner_message)
+        self.mode = str(request.get("mode", "debug"))
+        self.publish({"kind": "started", "title": title, "mode": self.mode})
+        client = PalletizeClient if self.mode == "execution" else RunnerClient
+        self.client = client(request, self._on_runner_message)
 
     def send(self, message: dict[str, Any]) -> None:
         if self.client is not None and self.client.is_running():
@@ -176,7 +251,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - the name is the stdlib's
         route = self.path.split("?", 1)[0]
         if route == "/api/experiments":
-            self._json({"experiments": _catalogue(), "speeds": [list(pair) for pair in SPEED_PRESETS]})
+            self._json({"experiments": _catalogue(), "speeds": [list(pair) for pair in SPEED_PRESETS],
+                        "modes": ["execution", "debug"]})
         elif route == "/api/events":
             self._events()
         else:
@@ -202,25 +278,43 @@ class _Handler(BaseHTTPRequestHandler):
     # -- handlers ----------------------------------------------------------------------
 
     def _run(self, payload: dict[str, Any]) -> None:
-        item = next((entry for entry in EXPERIMENTS if entry.key == payload.get("experiment")), None)
+        item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
         if item is None:
             raise ValueError(f"Experimento desconocido: {payload.get('experiment')!r}")
-        viewer = bool(payload.get("viewer")) and item.watchable
-        request = {
-            "experiment": item.key,
-            "controls": {
+        mode = str(payload.get("mode", "execution"))
+        if mode not in {"execution", "debug"}:
+            raise ValueError(f"Modo desconocido: {mode!r}")
+        viewer = bool(payload.get("viewer")) and item["watchable"]
+        if mode == "debug":
+            debug_key = "truck-unload" if item["source"] == "truck" else "palletize"
+            request = {
+                "mode": mode,
+                "experiment": debug_key,
+                "controls": {
+                    "speed": float(payload.get("speed", 1.0)),
+                    "fast_forward": bool(payload.get("fast_forward")),
+                    "show_true_com": bool(payload.get("show_true_com")),
+                    "show_estimated_com": bool(payload.get("show_estimated_com")),
+                },
+                "viewer": viewer,
+                "hold_at_end": bool(payload.get("hold_at_end")) and viewer,
+                "simplified_graphics": bool(payload.get("simplified_graphics")),
+                "measure_com": bool(payload.get("measure_com")),
+                "seed": payload.get("seed"),
+            }
+        else:
+            request = {
+                "mode": mode,
+                "source": item["source"],
+                "level": item["level"],
+                "viewer": viewer,
                 "speed": float(payload.get("speed", 1.0)),
                 "fast_forward": bool(payload.get("fast_forward")),
-                "show_true_com": bool(payload.get("show_true_com")),
-                "show_estimated_com": bool(payload.get("show_estimated_com")),
-            },
-            "viewer": viewer,
-            "hold_at_end": bool(payload.get("hold_at_end")) and viewer,
-            "simplified_graphics": bool(payload.get("simplified_graphics")),
-            "measure_com": bool(payload.get("measure_com")) if item.uses_robot else None,
-            "seed": payload.get("seed"),
-        }
-        self.session.start(request, item.title)
+                "simplified_graphics": bool(payload.get("simplified_graphics")),
+                "seed": payload.get("seed"),
+            }
+        title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"
+        self.session.start(request, title)
         self._json({"ok": True})
 
     def _events(self) -> None:

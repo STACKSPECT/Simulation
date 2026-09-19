@@ -31,6 +31,7 @@
     </div>
   </div>
   <div class="live">
+    <span class="mode-badge" id="mode-badge">EJECUCIÓN</span>
     <span class="status" id="status">Listo</span>
     <span class="link" id="link" title="Conexión con el servidor"></span>
   </div>
@@ -48,6 +49,15 @@
 
   <div class="column">
    <div class="settings">
+
+    <section class="panel">
+      <header class="panel-head"><h2>Modo</h2></header>
+      <div class="segmented mode-switch" id="modes">
+        <button type="button" data-mode="execution" class="on">Ejecución de verdad</button>
+        <button type="button" data-mode="debug">Depuración</button>
+      </div>
+      <p class="hint" id="mode-note">Lanza scripts/palletize.py y publica telemetría si hay credenciales.</p>
+    </section>
 
     <section class="panel">
       <header class="panel-head"><h2>Velocidad</h2></header>

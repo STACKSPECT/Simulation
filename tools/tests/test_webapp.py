@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from stable_pallet import webapp
-from stable_pallet.experiments import EXPERIMENTS
 from stable_pallet.runner import is_viewer_noise
 from stable_pallet.webapp import LISTENER_BACKLOG, Session, _catalogue, _Server
 
@@ -42,6 +41,7 @@ class FakeRunner:
 def runner(monkeypatch: pytest.MonkeyPatch) -> type[FakeRunner]:
     FakeRunner.instances = []
     monkeypatch.setattr(webapp, "RunnerClient", FakeRunner)
+    monkeypatch.setattr(webapp, "PalletizeClient", FakeRunner)
     return FakeRunner
 
 
@@ -82,10 +82,12 @@ def post(base: str, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, 
 # -- the catalogue ---------------------------------------------------------------------
 
 
-def test_the_catalogue_offers_every_prepared_experiment() -> None:
-    """The page builds its list from this alone, so nothing may be missing from it."""
+def test_the_catalogue_offers_the_nine_declared_levels() -> None:
     catalogue = _catalogue()
-    assert [item["key"] for item in catalogue] == [item.key for item in EXPERIMENTS]
+    assert [item["key"] for item in catalogue] == [
+        "level-11", "level-12", "level-13", "level-21", "level-22",
+        "level-23", "level-31", "level-32", "level-33",
+    ]
     for entry in catalogue:
         assert entry["title"] and entry["description"]
         assert isinstance(entry["watchable"], bool)
@@ -95,17 +97,14 @@ def test_the_catalogue_offers_every_prepared_experiment() -> None:
 def test_the_catalogue_says_where_the_cartons_come_from() -> None:
     """The card is tagged from this, which is the only sign a run starts at a trailer."""
     sources = {entry["key"]: entry["source"] for entry in _catalogue()}
-    assert sources["truck-unload"] == "truck"
-    assert sources["palletize"] == "conveyor"
-    assert set(sources.values()) <= {"truck", "conveyor"}
+    assert sources["level-11"] == "table"
+    assert sources["level-21"] == "conveyor"
+    assert sources["level-31"] == "truck"
+    assert set(sources.values()) == {"table", "conveyor", "truck"}
 
 
-def test_only_experiments_with_a_cell_claim_to_be_watchable() -> None:
-    """Offering the 3D window for a run that has no MuJoCo cell would just confuse."""
-    for entry in _catalogue():
-        if entry["kind"] in {"plan", "benchmark", "com-benchmark"}:
-            assert not entry["watchable"]
-            assert not entry["usesRobot"]
+def test_every_level_has_a_watchable_cell() -> None:
+    assert all(entry["watchable"] and entry["usesRobot"] for entry in _catalogue())
 
 
 # -- what a page is told ------------------------------------------------------------------
@@ -196,8 +195,9 @@ def test_the_catalogue_is_served_with_the_speed_presets(served: Any) -> None:
     base, _ = served
     _, body = get(base, "/api/experiments")
     payload = json.loads(body)
-    assert len(payload["experiments"]) == len(EXPERIMENTS)
+    assert len(payload["experiments"]) == 9
     assert ["x1", 1.0] in payload["speeds"]
+    assert payload["modes"] == ["execution", "debug"]
 
 
 def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, runner: type[FakeRunner]) -> None:
@@ -206,7 +206,8 @@ def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, 
         base,
         "/api/run",
         {
-            "experiment": "palletize",
+            "experiment": "level-11",
+            "mode": "execution",
             "speed": 2.0,
             "fast_forward": True,
             "show_true_com": True,
@@ -221,27 +222,28 @@ def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, 
 
     assert (status, body) == (200, {"ok": True})
     request = runner.instances[-1].request
-    assert request["experiment"] == "palletize"
-    assert request["controls"] == {
-        "speed": 2.0,
-        "fast_forward": True,
-        "show_true_com": True,
-        "show_estimated_com": False,
-    }
+    assert request["mode"] == "execution"
+    assert request["source"] == "table"
+    assert request["level"] == 11
+    assert request["speed"] == 2.0
     assert request["viewer"] is True
-    assert request["measure_com"] is False
+    assert request["fast_forward"] is True
     assert request["seed"] == 11
 
 
-def test_an_experiment_without_a_cell_never_gets_a_viewer(served: Any, runner: type[FakeRunner]) -> None:
-    """`plan` has no MuJoCo cell, so asking for the window must not reach the runner."""
+def test_debug_mode_uses_the_local_runner_without_telemetry(served: Any, runner: type[FakeRunner]) -> None:
     base, _ = served
-    post(base, "/api/run", {"experiment": "plan", "viewer": True, "hold_at_end": True})
+    post(base, "/api/run", {
+        "experiment": "level-11", "mode": "debug", "viewer": True,
+        "hold_at_end": True, "measure_com": False,
+    })
 
     request = runner.instances[-1].request
-    assert request["viewer"] is False
-    assert request["hold_at_end"] is False
-    assert request["measure_com"] is None
+    assert request["mode"] == "debug"
+    assert request["experiment"] == "palletize"
+    assert request["viewer"] is True
+    assert request["hold_at_end"] is True
+    assert request["measure_com"] is False
 
 
 def test_an_unknown_experiment_is_refused(served: Any) -> None:
@@ -253,7 +255,7 @@ def test_an_unknown_experiment_is_refused(served: Any) -> None:
 
 def test_transport_commands_are_passed_straight_through(served: Any, runner: type[FakeRunner]) -> None:
     base, _ = served
-    post(base, "/api/run", {"experiment": "plan"})
+    post(base, "/api/run", {"experiment": "level-11", "mode": "debug"})
     post(base, "/api/control", {"command": "scrub", "index": 7})
     post(base, "/api/control", {"speed": 0.5})
 
@@ -262,7 +264,7 @@ def test_transport_commands_are_passed_straight_through(served: Any, runner: typ
 
 def test_stopping_asks_the_runner_to_stop(served: Any, runner: type[FakeRunner]) -> None:
     base, _ = served
-    post(base, "/api/run", {"experiment": "plan"})
+    post(base, "/api/run", {"experiment": "level-11", "mode": "debug"})
     post(base, "/api/stop", {})
 
     assert runner.instances[-1].alive is False
