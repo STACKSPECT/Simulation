@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
+
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -63,6 +65,64 @@ def test_belt_moves_the_package_through_physics() -> None:
         assert len({round(value, 3) for value in positions}) > 10
         assert positions[-1] - positions[0] > 0.4
         assert abs(positions[-1] - scene.cfg["conveyor"]["station"][0]) < 0.04
+    finally:
+        scene.close()
+
+
+def _assert_delivered_at_rest(scene, supply, *, window_s: float = 0.5) -> None:
+    """Tras `present()`, el centro de la tapa no se mueve en la ventana de aproximación."""
+    assert supply.current is not None
+    top = scene.box_top_center(supply.current).copy()
+    scene.settle(window_s)
+    moved = scene.box_top_center(supply.current) - top
+    drift_mm = float(np.linalg.norm(moved) * 1000)
+    assert drift_mm < 5.0, f"deriva {drift_mm:.1f} mm del centro de la tapa en {window_s:.1f} s"
+
+
+def test_belt_present_waits_until_level_22_seed_1_is_still() -> None:
+    """Nivel 22, semilla 1: devolver con el cartón rodando era un offset de 20 mm."""
+    scene = build_scene(level_id=22, seed=1, simplified=True)
+    try:
+        supply = Belt(scene)
+        supply.stage(scene)
+        assert supply.present(scene) is not None
+        _assert_delivered_at_rest(scene, supply, window_s=1.0)
+        assert float(scene.cfg["episode"]["tolerance_xy"]) == 0.020
+    finally:
+        scene.close()
+
+
+def test_belt_present_settles_jittered_deliveries() -> None:
+    """Llegadas descentradas y giradas también tienen que quedar quietas.
+
+    El brazo se lleva el cartón antes de `release()`; sin apartarlo, el siguiente
+    choca con el que sigue en la estación y la espera expira.
+    """
+    for seed in (1, 2, 7):
+        scene = build_scene(level_id=22, seed=seed, simplified=True)
+        try:
+            supply = Belt(scene)
+            supply.stage(scene)
+            for _ in range(3):
+                assert supply.present(scene) is not None, f"semilla {seed}: sin entrega"
+                _assert_delivered_at_rest(scene, supply)
+                scene.park_box(supply.current)
+                supply.release(scene)
+        finally:
+            scene.close()
+
+
+def test_belt_times_out_if_the_package_never_settles() -> None:
+    """Si llega y no se asienta, es `timeout`, no una entrega con pose caducada."""
+    scene = build_scene(level_id=21, seed=1, simplified=True)
+    try:
+        supply = Belt(scene)
+        supply.timeout_s = 8.0
+        supply._resting = lambda _scene, _index, previous, _dt: (False, previous)
+        supply.stage(scene)
+        assert supply.present(scene) is None
+        assert supply.jammed
+        assert supply.current is None
     finally:
         scene.close()
 
