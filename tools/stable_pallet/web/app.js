@@ -285,7 +285,7 @@ function refresh() {
   ui.modeBadge.dataset.mode = mode;
   ui.modeNote.textContent = mode === "execution"
     ? "Lanza scripts/palletize.py y publica telemetría si hay credenciales."
-    : "Usa el runner local de tools/stable_pallet. No abre episodios ni sube telemetría.";
+    : "Lanza scripts/palletize.py con el nivel elegido y --no-telemetry. Misma escena que EJECUCIÓN, sin subir nada.";
 
   ui.viewer.disabled = busy || !selected?.watchable;
   ui.measureCom.disabled = busy || !selected?.usesRobot;
