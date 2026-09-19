@@ -1115,6 +1115,12 @@ class PalletScene:
 
     def sync_viewer(self) -> None:
         if self.viewer is not None and self.viewer.is_running():
+            # `m` es también el atajo de MuJoCo para "Center of Mass". Ver el porqué en
+            # `render.silence_com_markers`. El import va aquí y no arriba porque
+            # `render` importa de este módulo.
+            from src.cell.render import silence_com_markers
+
+            silence_com_markers(self.viewer, self.mujoco)
             self.viewer.sync()
 
     def close(self) -> None:

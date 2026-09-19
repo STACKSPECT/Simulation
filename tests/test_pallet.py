@@ -260,6 +260,33 @@ def test_the_m_key_draws_the_height_map_grid() -> None:
     draw_heightmap(scene, heightmap)                 # sin visor: ni pincha ni corta
 
 
+def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
+    """`M` YA era el atajo de MuJoCo para "Center of Mass", y pinta esferas blancas.
+
+    Las veintiséis letras están cogidas por las banderas del visor, así que la rejilla no
+    tiene ninguna libre: se queda con la tecla y deja la bandera de MuJoCo apagada. Si se
+    comparte, una pulsación enciende las esferas y apaga la rejilla, que es justo el
+    síntoma que hay que evitar.
+    """
+    import mujoco
+
+    assert mujoco.mjVISSTRING[mujoco.mjtVisFlag.mjVIS_COM][2].upper() == "M", (
+        "MuJoCo ha cambiado el atajo; revisa si la rejilla puede recuperar la tecla"
+    )
+
+    opt = mujoco.MjvOption()
+    opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 1       # como si el visor la hubiera puesto
+    viewer = SimpleNamespace(
+        opt=opt,
+        user_scn=SimpleNamespace(ngeom=0, maxgeom=16, geoms=[]),
+        sync=lambda: None,
+    )
+    scene = SimpleNamespace(viewer=viewer, mujoco=mujoco, cfg=CFG,
+                            deck_z=0.144, show_heightmap=False)
+    draw_heightmap(scene, _empty_pallet_map())
+    assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
+
+
 def test_depth_fuses_into_the_height_map() -> None:
     """La fusión, sin MuJoCo: un fotograma sintético cae en la celda que le toca.
 

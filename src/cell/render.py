@@ -52,6 +52,25 @@ class Snapshot:
 HEIGHTMAP_BUDGET = 900
 
 
+def silence_com_markers(viewer, mujoco) -> None:
+    """Apaga las esferas blancas del centro de masas del visor.
+
+    **`m` ya era un atajo de MuJoCo**: el visor tiene una letra asignada a cada bandera
+    de visualización y `M` es "Center of Mass", que pinta una esfera blanca en el CoM de
+    cada cuerpo. Las veintiséis letras están cogidas, así que la rejilla no tiene ninguna
+    libre donde meterse; lo que se hace es quedarse con la tecla y dejar la bandera de
+    MuJoCo apagada, en vez de compartirla y que las dos se desincronicen —que es
+    exactamente lo que pasaba: una pulsación encendía las esferas y apagaba la rejilla—.
+
+    Se llama en cada sincronización, no sólo al pulsar, porque el visor procesa su propia
+    tecla al margen de este callback y no hay forma de saber quién va primero.
+    """
+    opt = getattr(viewer, "opt", None)
+    if opt is None:
+        return
+    opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 0
+
+
 def draw_heightmap(scene, heightmap) -> None:
     """Pinta el mapa de alturas en el visor. La tecla `m` lo enciende y lo apaga.
 
@@ -65,6 +84,7 @@ def draw_heightmap(scene, heightmap) -> None:
     if viewer is None:
         return
     mujoco = scene.mujoco
+    silence_com_markers(viewer, mujoco)
     scn = viewer.user_scn
     scn.ngeom = 0
     if not getattr(scene, "show_heightmap", False):
