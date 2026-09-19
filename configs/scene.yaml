@@ -140,25 +140,20 @@ truck:
                                   # un cartón mientras la muñeca lo inclina para pesarlo
 
 motion:
-  # Dos velocidades, porque son dos cosas distintas y medirlas juntas sale mal.
+  # El UR10e admite 4 m/s de TCP y 120 / 120 / 180 / 180 / 180 / 180 grados/s en sus
+  # seis ejes (ficha técnica de UR, revisada en septiembre de 2026). La interpolación
+  # cúbica limita cada orden articular a esas cifras; las velocidades cartesianas de
+  # abajo quedan por debajo del límite del TCP.
   #
-  # LA MITAD DE LO QUE HABÍA, Y ESTÁ MEDIDO. Con 1.20 / 0.30 / 2.40 el episodio sólo
-  # aguantaba en fast-forward, donde el brazo TELETRANSPORTA entre waypoints y estas
-  # cifras ni se usan. En cuanto se interpola de verdad —`--speed 1`, que es lo que corre
-  # el visor y el panel— el nivel 11 se caía 1/4 con `ik_unreachable`: el servo no llegaba
-  # a la pose dentro de `reach_tolerance` y la maniobra se daba por imposible.
-  #
-  #   semilla 1, --speed 1     N1          N2        N3
-  #   1.20 / 0.30 / 2.40       1/4 FALLO   -         -
-  #   0.60 / 0.15 / 1.20       4/4 OK      6/6 OK    8/8 OK
-  #
-  # Lo que cuesta: el episodio de N1 pasa de 17.1 s a 72.9 s de tiempo SIMULADO; N2 sale
-  # en 115.1 s y N3 en 152.9 s. En fast-forward no cuesta nada, porque no se usan.
-  cartesian_speed: 0.60           # m/s en tránsito, con la caja en el aire
-  approach_speed: 0.15            # m/s en el descenso final sobre cartón o sobre el montón
-  angular_speed: 1.20             # rad/s de giro de muñeca
-  min_move_s: 0.25                # ningún waypoint más corto que esto
-  max_move_s: 2.50
+  # MEDIDO con física completa, oráculos y semilla 1: al terminar cada waypoint por
+  # tolerancia de seguimiento —y reservar el reposo estricto para el pesaje— el nivel
+  # 11 baja de 75,9 s a 45,3 s simulados y el 12 termina en 70,4 s. Los cuatro seeds
+  # 1..4 del nivel 11 terminaron bien; el mayor error de colocación fue 6,7 mm.
+  cartesian_speed: 1.50           # m/s en tránsito, con la caja en el aire
+  approach_speed: 0.30            # m/s en el descenso final sobre cartón o sobre el montón
+  angular_speed: 3.00             # rad/s de giro de la herramienta
+  joint_speed_limits: [2.0944, 2.0944, 3.1416, 3.1416, 3.1416, 3.1416]
+  min_move_s: 0.15                # evita órdenes impulsivas en waypoints muy próximos
   transit_height: 0.94            # todo el trayecto va en cartesiano a esta cota mínima
   place_clearance: 0.18           # por encima del destino antes de bajar
   stack_clearance: 0.22           # por encima de lo más alto del montón al cruzar
@@ -172,6 +167,10 @@ motion:
   ik_step_limit: 0.12             # rad por iteración, para que no salte de rama
   # Tolerancia del SERVO, que es otra cosa y va MUY por encima. Ver `pallet.yaml`.
   reach_tolerance: 0.02
+  approach_tolerance: 0.005       # objetivo de corrección; fallo duro sigue en 20 mm
+  approach_end_speed: 0.05        # rad/s; no se toca cartón hasta frenar por debajo
+  tracking_steps: 5               # 10 ms dentro de tolerancia con timestep de 2 ms
+  tracking_timeout_s: 0.50        # tras esto se calcula una nueva corrección cartesiana
   rest_speed: 0.008               # se da por parado por debajo de esta velocidad articular
   rest_steps: 25                  # ...sostenida tantos pasos, para que un cruce por cero
                                   # a mitad de oscilación no pase por quietud
