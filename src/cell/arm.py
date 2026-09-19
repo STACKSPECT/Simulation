@@ -130,6 +130,10 @@ class ArmController:
         self.fast_forward = False
         self.held: int | None = None
         self.grasp: Grasp | None = None
+        # Lo que quedó sin corregir en el último `move_to`, en metros. Un acierto limpio
+        # y un roce justo por debajo de `reach_tolerance` acaban los dos en `True`, así
+        # que sin esto no hay forma de distinguirlos desde fuera.
+        self.last_residual = 0.0
         # La orientación de trabajo tal y como el modelo la ve. Se lee una vez, con el
         # brazo en la pose de reposo, y es la referencia de todas las poses del episodio.
         self.reference = scene.data.site_xmat[scene.tcp_site].reshape(3, 3).copy()
@@ -286,6 +290,7 @@ class ArmController:
                 self.move_joints(target_q, seconds)
             error = desired_tool - scene.data.site_xpos[scene.tcp_site]
             if np.linalg.norm(error) < 0.0025:
+                self.last_residual = float(np.linalg.norm(error))
                 return True
             commanded = commanded + error
 
@@ -294,6 +299,7 @@ class ArmController:
         # quedan cortos. Sellar sobre un cartón al que la herramienta nunca llegó es como
         # una celda lo coge por una esquina y lo deja en otro sitio.
         residual = float(np.linalg.norm(desired_tool - scene.data.site_xpos[scene.tcp_site]))
+        self.last_residual = residual
         return residual <= self.reach_tolerance
 
     # ── la ventosa ───────────────────────────────────────────────────────────
