@@ -20,14 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# Every label runs this many times faster than it says: "x1" is one simulated second in
-# a quarter of a wall-clock second and "x4" is sixteen times real time. Back to 1.0 for
-# real-time pacing; it is the only knob, so the CLI `--speed` follows too.
-SPEED_SCALE = 4.0
-
-# What the speed selector offers, before `SPEED_SCALE`. `0.0` means "no pacing at all":
-# step as fast as the machine manages, which is still every trajectory, unlike
-# fast-forward.
+# What the speed selector offers. `0.0` means "no pacing at all": step as fast as the
+# machine manages, which is still every trajectory, unlike fast-forward.
 SPEED_PRESETS: tuple[tuple[str, float], ...] = (
     ("x0.5", 0.5),
     ("x1", 1.0),
