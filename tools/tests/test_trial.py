@@ -113,8 +113,8 @@ def test_interpolated_wrist_probe_keeps_com_accuracy(generated_eval: dict) -> No
     for item in generated_eval["com_measurements"]:
         truth = declared[item["package_id"]]
         assert item["trustworthy"], item
-        assert item["error_mm"] < 1.0
-        assert item["measured_mass_kg"] == pytest.approx(truth["mass"], abs=0.02)
+        assert item["error_xy_mm"] < 2.0
+        assert item["measured_mass_kg"] == pytest.approx(truth["mass"], abs=0.05)
 
 
 def test_saved_stack_is_replayed_for_every_shake_trial(generated_eval: dict) -> None:

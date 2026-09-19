@@ -66,6 +66,7 @@ def run_generated_eval(
     video_path: str | Path | None = None,
     simplified_graphics: bool = True,
     measure_com: bool = False,
+    precise_com: bool = False,
     instant_place: bool = False,
     shake: bool | ShakeConfig = True,
     name: str | None = None,
@@ -81,6 +82,7 @@ def run_generated_eval(
         seed=seed,
         simplified_graphics=simplified_graphics,
         measure_com=False if instant_place else measure_com,
+        precise_com=False if instant_place else precise_com,
         controls=controls,
     )
     result = simulator.run(shake=shake, instant_place=instant_place)

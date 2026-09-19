@@ -110,6 +110,7 @@ def command_simulate(args: argparse.Namespace) -> int:
         seed=args.seed,
         simplified_graphics=args.simplified_graphics,
         measure_com=args.measure_com,
+        precise_com=args.precise_com,
         controls=_controls_from_args(args),
     )
     result = simulator.run()
@@ -139,6 +140,7 @@ def command_shake(args: argparse.Namespace) -> int:
         seed=args.seed,
         simplified_graphics=args.simplified_graphics,
         measure_com=False if args.instant_place else args.measure_com,
+        precise_com=False if args.instant_place else args.precise_com,
         controls=_controls_from_args(args),
     )
     result = simulator.run(
@@ -216,13 +218,14 @@ def _print_unload(truck: dict) -> None:
 
 def _print_com_measurements(readings: list) -> None:
     print("\nWrist CoM (mm from geometric centre):")
-    print(f"{'id':<12} {'kg':>6}  {'measured mm':<28} {'declared mm':<28} {'err':>6}")
+    print(f"{'id':<12} {'kg':>6}  {'measured mm':<28} {'declared mm':<28} {'XY':>6} {'3D':>6}")
     for item in readings:
         measured = ", ".join(f"{value:+6.1f}" for value in item["measured_com_mm"])
         declared = ", ".join(f"{value:+6.1f}" for value in item["declared_com_mm"])
         print(
             f"{item['package_id']:<12} {item['measured_mass_kg']:6.2f}  "
-            f"({measured})  ({declared})  {item['error_mm']:6.1f}"
+            f"({measured})  ({declared})  {item.get('error_xy_mm', item['error_mm']):6.1f} "
+            f"{item['error_mm']:6.1f}"
         )
 
 
@@ -235,6 +238,7 @@ def command_eval(args: argparse.Namespace) -> int:
         video_path=args.video,
         simplified_graphics=args.simplified_graphics,
         measure_com=False if args.instant_place else args.measure_com,
+        precise_com=False if args.instant_place else args.precise_com,
         instant_place=args.instant_place,
         name=args.name,
         controls=_controls_from_args(args),
@@ -371,6 +375,11 @@ def _add_cell_args(parser: argparse.ArgumentParser, *, output: str) -> None:
         help="Trust the centres of mass declared in the scenario instead of weighing each package",
     )
     parser.add_argument(
+        "--precise-com",
+        action="store_true",
+        help="Tilt the wrist through several poses instead of one plumb reading",
+    )
+    parser.add_argument(
         "--source",
         choices=("truck", "conveyor"),
         default=None,
@@ -395,6 +404,7 @@ def command_run(args: argparse.Namespace) -> int:
             controls=_controls_from_args(args),
             simplified_graphics=args.simplified_graphics,
             measure_com=args.measure_com,
+            precise_com=args.precise_com,
             seed=args.seed,
             output=args.output,
         ),
@@ -445,7 +455,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Trust the declared centres of mass instead of weighing each package",
     )
-    run.set_defaults(handler=command_run)
+    run.add_argument(
+        "--precise-com",
+        action="store_true",
+        help="Tilt the wrist through several poses instead of one plumb reading",
+    )
+    run.set_defaults(handler=command_run, precise_com=False)
 
     plan = subparsers.add_parser("plan", help="Plan the complete sequence without physics")
     plan.add_argument("--scenario", default="scenarios/mixed_boxes.yaml")

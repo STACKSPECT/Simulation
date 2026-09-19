@@ -54,9 +54,13 @@ class ComMeasurement:
     measured_com: tuple[float, float, float]
     declared_com: tuple[float, float, float]
     error_mm: float
+    error_xy_mm: float
     normalised: tuple[float, float, float]
     trustworthy: bool
     replanned: bool
+    hidden_mm: float = 0.0
+    duration_s: float = 0.0
+    method: str = "in_situ"
 
 
 @dataclass(frozen=True, slots=True)
@@ -783,6 +787,7 @@ class PalletizingSimulator:
         video_path: str | Path | None = None,
         seed: int = 7,
         measure_com: bool = True,
+        precise_com: bool = False,
         simplified_graphics: bool = False,
         controls: ViewerControls | None = None,
     ) -> None:
@@ -803,6 +808,7 @@ class PalletizingSimulator:
         self.planner = StablePalletPlanner(scenario.planner)
         self.suction = SuctionArray()
         self.measure_com = measure_com
+        self.precise_com = precise_com
         # What the cell believes about each package. With measurement on, the centre of
         # mass starts unknown -- assumed centred, which is what a cell without a sensor
         # has to do -- and each pick replaces the guess with what the wrist actually felt.
@@ -1971,9 +1977,9 @@ class PalletizingSimulator:
         tare = None
         if self.measure_com:
             # Imported here because `com_probe` builds on this module.
-            from .com_probe import ComProbe
+            from .com_probe import ComProbe, ProbeConfig
 
-            probe = ComProbe(self)
+            probe = ComProbe(self, ProbeConfig(precise=self.precise_com))
             tare = probe.calibrate()
         remaining = list(range(len(self.scenario.packages)))
         order: list[int] = []
@@ -2043,6 +2049,10 @@ class PalletizingSimulator:
                     placement = self.planner.plan_next(
                         state, [package, *(self.known_packages[item] for item in incoming[1:])]
                     ).placement
+                error_xy_mm = math.hypot(
+                    reading.com_local[0] - truth.com[0],
+                    reading.com_local[1] - truth.com[1],
+                ) * 1_000
                 com_readings.append(
                     ComMeasurement(
                         package_id=package.id,
@@ -2050,15 +2060,20 @@ class PalletizingSimulator:
                         measured_com=reading.com_local,
                         declared_com=truth.com,
                         error_mm=float(math.dist(reading.com_local, truth.com) * 1000),
+                        error_xy_mm=float(error_xy_mm),
                         normalised=reading.com_normalised,
                         trustworthy=reading.trustworthy,
                         replanned=_placement_differs(blind_placement, placement),
+                        hidden_mm=reading.hidden_m * 1_000,
+                        duration_s=reading.duration_s,
+                        method=reading.method,
                     )
                 )
                 dx, dy, dz = (value * 1_000 for value in reading.com_local)
                 self.set_viewer_status(
                     f"{package.id}  CoM ({dx:+.1f}, {dy:+.1f}, {dz:+.1f}) mm",
-                    f"error {com_readings[-1].error_mm:.1f} mm",
+                    f"error {com_readings[-1].error_xy_mm:.1f} mm XY / "
+                    f"{com_readings[-1].error_mm:.1f} mm 3D",
                 )
             else:
                 self._set_suction(index, True)
@@ -2138,9 +2153,13 @@ class PalletizingSimulator:
                     "measured_com_mm": [value * 1_000 for value in item.measured_com],
                     "declared_com_mm": [value * 1_000 for value in item.declared_com],
                     "error_mm": item.error_mm,
+                    "error_xy_mm": item.error_xy_mm,
                     "normalised": list(item.normalised),
                     "trustworthy": item.trustworthy,
                     "replanned": item.replanned,
+                    "hidden_mm": item.hidden_mm,
+                    "duration_s": item.duration_s,
+                    "method": item.method,
                 }
                 for item in com_readings
             ],

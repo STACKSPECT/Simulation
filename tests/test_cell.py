@@ -16,6 +16,8 @@ from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import build_scene  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
+from src.vision.gauge import WristGauge  # noqa: E402
+from src.vision.oracle import OracleDetector  # noqa: E402
 
 
 def test_scenes_compile_for_all_sources() -> None:
@@ -112,6 +114,45 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
             assert not failed, f"nivel {level}: poses fuera de alcance: {failed}"
         finally:
             scene.close()
+
+
+def test_wrist_gauge_recovers_mass_and_planar_cog() -> None:
+    """Una lectura a plomo estima masa y CoG en planta; la altura se ancla al centro."""
+    scene = build_scene(level_id=11, seed=3, simplified=True)
+    arm = ArmController(scene)
+    arm.fast_forward = True
+    try:
+        supply = make_supply(scene)
+        supply.stage(scene)
+        scene.supply = supply
+        gauge = WristGauge()
+        gauge.calibrate(scene, arm)
+        package_id = supply.present(scene)
+        assert package_id is not None
+        observation = OracleDetector().observe(scene)[0]
+        box = next(item for item in scene.boxes if item.package_id == package_id)
+        top = observation.position.copy()
+        top[2] += observation.dims_guess[2] / 2
+        seal_z = float(top[2]) + arm.cup_gap
+        safe_z = seal_z + 0.18
+        assert arm.go_to(float(top[0]), float(top[1]), safe_z, observation.yaw)
+        assert arm.go_to(float(top[0]), float(top[1]), seal_z, observation.yaw, approach=True)
+        assert arm.seal(box.index)
+        assert arm.go_to(float(top[0]), float(top[1]), safe_z, observation.yaw)
+        spec = gauge.measure(scene, arm, observation)
+        assert abs(spec.mass_kg - box.mass_kg) < 0.05
+        assert abs(spec.cog_offset_m[0] - box.cog_offset_m[0]) < 0.003
+        assert abs(spec.cog_offset_m[1] - box.cog_offset_m[1]) < 0.003
+        assert abs(spec.cog_offset_m[2]) < 0.003
+        weld = scene.mujoco.mj_name2id(
+            scene.model, scene.mujoco.mjtObj.mjOBJ_EQUALITY, f"suction_{box.index}"
+        )
+        assert weld < 0
+        assert scene.held is not None and scene.held.index == box.index
+    finally:
+        if arm.held is not None:
+            arm.release()
+        scene.close()
 
 
 def main() -> int:

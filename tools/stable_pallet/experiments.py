@@ -187,6 +187,7 @@ class RunOptions:
     controls: ViewerControls | None = None
     simplified_graphics: bool = False
     measure_com: bool | None = None
+    precise_com: bool = False
     seed: int | None = None
     count: int | None = None
     trials: int | None = None
@@ -246,6 +247,7 @@ def _run_cell(item: Experiment, options: RunOptions) -> dict[str, Any]:
         seed=options.seed if options.seed is not None else item.seed,
         simplified_graphics=options.simplified_graphics,
         measure_com=_measures_com(item, options),
+        precise_com=options.precise_com and _measures_com(item, options),
         controls=options.controls,
     )
     result = simulator.run(shake=item.shake, instant_place=item.instant_place)
@@ -263,6 +265,7 @@ def _run_generated(item: Experiment, options: RunOptions) -> dict[str, Any]:
         video_path=options.video_path,
         simplified_graphics=options.simplified_graphics,
         measure_com=_measures_com(item, options),
+        precise_com=options.precise_com and _measures_com(item, options),
         instant_place=item.instant_place,
         shake=item.shake,
         controls=options.controls,
@@ -350,9 +353,11 @@ def summarise(item: Experiment, result: dict[str, Any]) -> list[str]:
     readings = result.get("com_measurements") or []
     if readings:
         mean_error = sum(item["error_mm"] for item in readings) / len(readings)
+        mean_xy = sum(item.get("error_xy_mm", item["error_mm"]) for item in readings) / len(readings)
         replanned = sum(1 for item in readings if item["replanned"])
         lines.append(
-            f"Pesaje en muñeca: error medio {mean_error:.1f} mm en {len(readings)} cajas, "
+            f"Pesaje en muñeca: error medio {mean_error:.1f} mm "
+            f"({mean_xy:.2f} mm en planta) en {len(readings)} cajas, "
             f"{replanned} replanificadas tras medir"
         )
     pallet_com = result.get("pallet_com")

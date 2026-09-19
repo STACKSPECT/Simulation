@@ -49,6 +49,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from src.cell import Pose, rotation_z, tcp_frame
+from src.cell.scene import HeldPackage
 
 
 @dataclass(frozen=True)
@@ -382,14 +383,46 @@ class ArmController:
         scene.step(0.15)
         return self.is_holding()
 
+    def make_rigid(self) -> bool:
+        """Reparenta el paquete sellado para que el sensor de muñeca vea un agarre rígido.
+
+        Una `weld` sesga el par que informa la brida —de 50 a 750 mm de error de CoM a
+        estas masas, y esperar no lo quita. Un sello de ventosa es una unión rígida: el
+        cartón cuelga de `tool` y la restricción desaparece.
+        """
+        if self.held is None:
+            return False
+        scene = self.scene
+        if scene.held is not None and scene.held.index == self.held:
+            return self.is_holding()
+        index = self.held
+        body = scene.body_id(index)
+        tool_rotation = scene.data.xmat[scene.tool_body].reshape(3, 3)
+        position = tool_rotation.T @ (scene.data.xpos[body] - scene.data.xpos[scene.tool_body])
+        inverse_tool = np.empty(4)
+        relative = np.empty(4)
+        self.mujoco.mju_negQuat(inverse_tool, scene.data.xquat[scene.tool_body])
+        self.mujoco.mju_mulQuat(relative, inverse_tool, scene.data.xquat[body])
+        scene.rebuild(HeldPackage(
+            index,
+            tuple(float(value) for value in position),
+            tuple(float(value) for value in relative),
+        ))
+        if self.grasp is not None:
+            self.show_cups(self.grasp)
+        return self.is_holding()
+
     def release(self) -> None:
         """Corta el vacío. Con ventosa no hay que abrir nada: se suelta y ya."""
         if self.held is None:
             return
-        equality = self._equality(self.held)
-        if equality >= 0:
-            self.scene.data.eq_active[equality] = 0
-            self.mujoco.mj_forward(self.scene.model, self.scene.data)
+        if self.scene.held is not None:
+            self.scene.rebuild(None)
+        else:
+            equality = self._equality(self.held)
+            if equality >= 0:
+                self.scene.data.eq_active[equality] = 0
+                self.mujoco.mj_forward(self.scene.model, self.scene.data)
         self.held = None
         self.grasp = None
         self.scene.step(float(self.scene.cfg["motion"].get("release_settle_s", 0.15)))

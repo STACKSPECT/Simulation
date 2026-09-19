@@ -135,7 +135,9 @@ def test_the_viewer_can_be_asked_for_from_the_command_line() -> None:
     args = build_parser().parse_args(["simulate", "--viewer"])
     assert args.viewer is True
     assert args.measure_com is True
+    assert args.precise_com is False
     assert build_parser().parse_args(["simulate", "--no-measure-com"]).measure_com is False
+    assert build_parser().parse_args(["simulate", "--precise-com"]).precise_com is True
 
 
 def test_the_shake_command_is_wired_on_the_cli() -> None:

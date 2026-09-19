@@ -1,6 +1,6 @@
 """Stable palletizing planner and simulation."""
 
-from .com_estimator import ComEstimate, estimate_com
+from .com_estimator import HIDDEN_LIMIT_M, ComEstimate, estimate_com, hidden_planar_error
 from .com_probe import ComProbe, PackageMeasurement
 from .generator import BoxGenerator, BoxGeneratorConfig, generate_boxes
 from .models import Package, Pallet, Placement, StackState
@@ -16,6 +16,7 @@ __all__ = [
     "ComProbe",
     "EVAL_BOX_COUNT",
     "EVAL_SEED",
+    "HIDDEN_LIMIT_M",
     "Package",
     "PackageMeasurement",
     "Pallet",
@@ -31,6 +32,7 @@ __all__ = [
     "estimate_com",
     "estimate_pallet_com",
     "generate_boxes",
+    "hidden_planar_error",
     "run_generated_eval",
 ]
 __version__ = "0.1.0"

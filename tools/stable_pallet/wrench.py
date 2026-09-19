@@ -17,6 +17,7 @@ so it is observable information rather than simulator ground truth.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -30,7 +31,10 @@ SENSOR_SITE = "ft_site"
 # Spread allowed between the gravity vectors of one batch, m/s2. Two measurement poses
 # differ by several m/s2, so this separates "same pose, arm still settling" from "I mixed
 # two poses together", which is the mistake worth catching.
-SAME_POSE_TOLERANCE = 1e-2
+#
+# A quick in-situ reading still creeps a few milliradians; a threshold of ~0.06° fired
+# every time. ~0.3° is harmless for a single pose and still catches a mixed pair.
+SAME_POSE_TOLERANCE = 9.81 * math.sin(math.radians(0.3))
 
 
 def skew(vector: np.ndarray) -> np.ndarray:

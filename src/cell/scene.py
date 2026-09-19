@@ -980,6 +980,9 @@ class PalletScene:
         self.ft_site = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "ft_site")
         self.tool_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "tool")
         self.pallet_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pallet")
+        self.pallet_weld = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_EQUALITY, "pallet_anchor"
+        )
 
     def rebuild(self, held: HeldPackage | None) -> None:
         """Vuelve a compilar con el paquete colgando de la herramienta, o sin él.
@@ -990,6 +993,9 @@ class PalletScene:
         mujoco = self.mujoco
         arm = np.asarray(self.data.qpos[self.arm_qpos]).copy()
         poses = {box.index: self.box_pose(box.index) for box in self.boxes}
+        pallet_locked = (
+            bool(self.data.eq_active[self.pallet_weld]) if self.pallet_weld >= 0 else True
+        )
 
         self.held = held
         self._compile(build_mjcf(self.cfg, self.level, self.boxes, held,
@@ -997,12 +1003,15 @@ class PalletScene:
 
         self.data.qpos[self.arm_qpos] = arm
         self.data.ctrl[:] = arm
+        if self.pallet_weld >= 0:
+            self.data.eq_active[self.pallet_weld] = pallet_locked
         for box in self.boxes:
             if held is not None and box.index == held.index:
                 continue
             position, quaternion = poses[box.index]
             self._write_free_pose(box.index, position, quaternion)
         mujoco.mj_forward(self.model, self.data)
+        self._reload_viewer()
 
     # ── estado de las cajas ──────────────────────────────────────────────────
 
@@ -1076,6 +1085,15 @@ class PalletScene:
     def settle(self, seconds: float | None = None) -> None:
         """Deja que la escena se asiente. Medir antes de esto es medir cajas cayendo."""
         self.step(self.cfg["motion"]["settle_seconds"] if seconds is None else seconds)
+
+    def _reload_viewer(self) -> None:
+        """Mantiene la misma ventana GLFW cuando el árbol cinemático cambia al sellar."""
+        if self.viewer is None:
+            return
+        simulate = getattr(self.viewer, "_get_sim", lambda: None)()
+        if simulate is None:
+            return
+        simulate.load(self.model, self.data, "")
 
     def sync_viewer(self) -> None:
         if self.viewer is not None and self.viewer.is_running():

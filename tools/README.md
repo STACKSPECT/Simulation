@@ -14,7 +14,7 @@ el benchmark y el panel de control.
 | Módulo | Qué hace |
 |---|---|
 | `planner.py`, `stability.py`, `geometry.py` | Beam search con *lookahead*, polígono de soporte, propagación descendente de cargas |
-| `com_probe.py`, `com_estimator.py`, `tare.py`, `wrench.py` | Báscula de muñeca: masa y centro de gravedad del balance estático, sin leer la verdad del simulador |
+| `com_probe.py`, `com_estimator.py`, `tare.py`, `wrench.py` | Báscula de muñeca: una lectura a plomo por defecto; `--precise-com` barre varias poses |
 | `truck.py` | Cómo llega cargado un remolque y el único orden en que puede vaciarse |
 | `suction.py` | OnRobot VGP20: qué bloque de ventosas cabe en cada caja y con qué capacidad |
 | `shake.py` | 15 sacudidas de transporte (0,05–0,80 g en X, Y, Z) y ensayo de viga estrecha |
@@ -33,7 +33,7 @@ uv run stable-pallet plan --scenario scenarios/mixed_boxes.yaml    # sin física
 uv run stable-pallet simulate --viewer --no-measure-com            # ver la celda
 uv run stable-pallet shake --instant-place --no-measure-com        # solo el palé
 uv run stable-pallet benchmark --trials 20                         # contra first-fit
-uv run pytest                                                      # 168 comprobaciones
+uv run pytest                                                      # 175 comprobaciones
 ```
 
 El panel muestra nueve tarjetas, tomadas de `configs/pallet.yaml`, y un selector de

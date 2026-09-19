@@ -108,8 +108,10 @@ python scripts/palletize.py -n 3                # 3 episodios; SUBE por defecto
 python scripts/palletize.py -n 3 --no-telemetry # sin subir, solo disco
 python scripts/palletize.py --source truck      # primer nivel de camión
 python scripts/palletize.py --level 23          # nivel concreto de cinta
+python scripts/palletize.py --no-oracle-gauge --no-telemetry --level 11
+python scripts/palletize.py --no-oracle-gauge --precise-com --no-telemetry --level 11
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
-python tests/test_cell.py                       # las tres fuentes, cámaras e IK
+python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
 cd tools && uv run pytest                       # el demostrador sobrevive a la mudanza
 ```
@@ -257,7 +259,11 @@ mejora no significa nada:
 
 1. **`vision/gauge.py` lo estima**, no lo lee del catálogo — es justo lo que la medición
    aporta. Si el gauge devuelve el valor exacto del YAML, sigues teniendo un oráculo con
-   otro nombre.
+   otro nombre. La implementación es una lectura de muñeca a plomo: las dos componentes
+   horizontales salen exactas, la vertical se ancla al centro geométrico (nadie aguas
+   abajo la lee) y `--precise-com` deja el barrido de cuatro poses cuando hace falta.
+   Modelar el sello con una `weld` sesga el par; hay que reparentar el bulto a la
+   herramienta. Ver `pesaje-en-el-sitio.md`.
 2. **`planner/heuristic.py` lo puntúa**: un paquete con el CoG descentrado apoyado al
    borde del montón es un derrumbe con retraso. Es un término del score, no un filtro.
 3. **`measure.pallet_state` lo usa** en vez del centro de la caja al acumular el CoG del
@@ -341,7 +347,7 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 2. **La medida, sola:** `python -m src.measure`. Sus asserts cubren el CoG con cajas
    fuera de tolerancia y el margen contra el polígono de soporte.
 3. **La celda:** `python tests/test_cell.py`. Compila las tres fuentes, comprueba las
-   cámaras, la banda, el orden del camión y la envolvente de IK.
+   cámaras, la banda, el orden del camión, la envolvente de IK y el pesaje de muñeca.
 4. **Con visor:** `python scripts/palletize.py --viewer --source table`.
 5. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry --level 21`. Un episodio
    entero a disco; mira el `episodes.jsonl`.

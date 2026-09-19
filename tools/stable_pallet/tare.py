@@ -32,6 +32,16 @@ MIN_TORQUE_POSES = 3
 # Above this the pose set is ill-conditioned and the tare cannot be trusted.
 MAX_CONDITION = 1.0e3
 
+# Wrist joint offsets from a plumb pose, in radians. The first hangs straight down;
+# the rest tilt the tool so gravity points somewhere else in the sensor frame. The
+# tare needs the tilts; `--precise-com` reuses them for a full-rank payload solve.
+WRIST_OFFSETS: tuple[tuple[float, float, float], ...] = (
+    (0.0, 0.0, 0.0),
+    (0.7, 0.0, 0.0),
+    (0.0, 0.9, 0.0),
+    (-0.5, 0.6, 0.4),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class TareCalibration:

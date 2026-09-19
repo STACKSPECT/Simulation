@@ -5,46 +5,42 @@ infeed does not: mass and balance are exactly what nobody wrote on the box, and 
 whose weight sits off to one side is the one that topples a stack or peels off the cups.
 This probe recovers both from the wrist force/torque sensor alone.
 
-The cycle is: tare the empty tool, take the package, then hold it still in several wrist
-orientations and solve the static wrench balance of `stable_pallet.com_estimator`. Gravity
-in the sensor frame comes from forward kinematics, so nothing here reads simulator truth.
+Default cycle: tare the empty tool once, take the package, hold it still with the tool
+plumb, and solve the rank-2 wrench balance of `stable_pallet.com_estimator` against the
+geometric centre of the carton. The two horizontal components come out exactly; the
+vertical one is the prior, which no placement decision in this cell reads.
+
+`--precise-com` still drives the wrist through several tilted orientations so all three
+directions resolve. Gravity in the sensor frame comes from forward kinematics, so nothing
+here reads simulator truth.
 
 Two details decide whether this works at all:
 
-- **The orientations have to tilt the tool.** `PalletizingSimulator._solve_ik` only aims
-  the tool straight down with a yaw, and gravity expressed in the sensor frame is then
-  identical in every pose. That leaves the system at rank 2 and the centre of mass is not
-  observable. So the probe drives the wrist joints directly instead of going through IK,
-  with the same joint-space smoothstep `_move_tool` uses for palletizing.
 - **The grasp has to be rigid.** Holding the package with a weld equality biases the
   torque the sensor reports: measured on this cell it costs between 50 mm and 750 mm of
   centre-of-mass error depending on `torquescale`, and it is not a settling artefact --
   it survives full settling and stiffer constraints. Sealing therefore rebuilds the cell
   with the package parented to the tool, which is what a sealed vacuum cup is anyway.
+- **The reading pose has to stay plumb.** A joint-space "safety lift" of 0.35 rad on the
+  shoulder tilts the tool, the blind axis leaves the carton vertical, and the prior
+  leaks into the plane -- the error is exactly `half-height * sin(lean)`. That lift is
+  only for the tilted sweep, which is what it existed for.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
 
-from .com_estimator import ComEstimate, estimate_com
+from .com_estimator import HIDDEN_LIMIT_M, TILTED, ComEstimate, estimate_com, hidden_planar_error
 from .models import Package
 from .simulator import HeldPackage, PalletizingSimulator
-from .tare import TareCalibration, calibrate_tare
+from .tare import WRIST_OFFSETS, TareCalibration, calibrate_tare
 from .wrench import average_wrench, read_wrench
 
-# Wrist offsets from the resting pose, in radians. The first is the tool hanging straight
-# down; the rest tilt it so gravity points somewhere else in the sensor frame. Two
-# non-parallel poses already give full rank, the others just average noise away.
-MEASUREMENT_OFFSETS: tuple[tuple[float, float, float], ...] = (
-    (0.0, 0.0, 0.0),
-    (0.7, 0.0, 0.0),
-    (0.0, 0.9, 0.0),
-    (-0.5, 0.6, 0.4),
-)
+MEASUREMENT_OFFSETS = WRIST_OFFSETS
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,11 +48,17 @@ class ProbeConfig:
     # Same smoothstep duration as `PalletizingSimulator._move_tool`.
     move_seconds: float = 0.85
     settle_steps: int = 800
-    average_steps: int = 120
+    # Consecutive steps below `static_velocity`. One frame at the bottom of a wobble is
+    # not stillness: that is how a reading of 1371 N showed up on a 8 kg carton.
+    static_steps: int = 25
+    average_steps: int = 30
+    tare_average_steps: int = 120
     # The wrench balance is static: measuring while anything still moves folds inertial
     # terms into the reading and corrupts the moment.
-    static_velocity: float = 1e-3  # rad/s and m/s
-    lift_clearance: float = 0.35  # m above the pick pose before measuring
+    static_velocity: float = 0.008  # rad/s and m/s, same as the arm's rest_speed
+    # Radians on shoulder_lift, only when the wrist is about to tilt.
+    lift_clearance: float = 0.35
+    precise: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +71,10 @@ class PackageMeasurement:
     com_local: tuple[float, float, float]  # m from the package centre, in package axes
     com_normalised: tuple[float, float, float]  # fraction of each half-extent
     estimate: ComEstimate
+    lean: float = 0.0
+    hidden_m: float = 0.0
+    duration_s: float = 0.0
+    method: str = "in_situ"
 
     @property
     def trustworthy(self) -> bool:
@@ -96,6 +102,21 @@ class ComProbe:
 
     # -- motion ------------------------------------------------------------------------
 
+    def _wait_static(self) -> bool:
+        """True when the wrist (and the carried carton) stayed still for N steps."""
+        sim = self.sim
+        still = 0
+        for _ in range(self.config.settle_steps):
+            if self._is_static:
+                still += 1
+                if still >= self.config.static_steps:
+                    return True
+            else:
+                still = 0
+            sim.mujoco.mj_step(sim.model, sim.data)
+            sim._capture_frame()
+        return still >= self.config.static_steps
+
     def _settle(self, target: np.ndarray) -> bool:
         sim = self.sim
         if sim.controls.fast_forward:
@@ -111,14 +132,9 @@ class ComProbe:
                 target,
                 seconds=self.config.move_seconds,
                 rest_speed=self.config.static_velocity,
-                rest_steps=self.config.settle_steps,
+                rest_steps=self.config.static_steps,
             )
-        for _ in range(self.config.settle_steps):
-            if self._is_static:
-                return True
-            sim.mujoco.mj_step(sim.model, sim.data)
-            sim._capture_frame()
-        return self._is_static
+        return self._wait_static()
 
     @property
     def _is_static(self) -> bool:
@@ -130,25 +146,21 @@ class ComProbe:
         body = sim.mujoco.mj_name2id(sim.model, sim.mujoco.mjtObj.mjOBJ_BODY, f"package_{self._held.index}")
         return bool(np.max(np.abs(sim.data.cvel[body])) <= self.config.static_velocity)
 
-    def _sample_here(self) -> Any:
+    def _sample_here(self, *, steps: int | None = None) -> Any:
         sim = self.sim
         # Inertial wrench from leftover motion folds straight into the moment, so a
         # sample taken while the wrist is still moving is not a CoM measurement.
-        for _ in range(self.config.settle_steps):
-            if self._is_static:
-                break
-            sim.mujoco.mj_step(sim.model, sim.data)
-            sim._capture_frame()
-        else:
+        if not self._wait_static():
             raise RuntimeError("com probe: arm still moving, CoM sample refused")
         batch = []
-        for _ in range(self.config.average_steps):
+        n_steps = self.config.average_steps if steps is None else steps
+        for _ in range(n_steps):
             sim.mujoco.mj_step(sim.model, sim.data)
             sim._capture_frame()
             batch.append(read_wrench(sim.mujoco, sim.model, sim.data))
         return average_wrench(batch)
 
-    def _sweep(self, base: np.ndarray, *, label: str) -> list[Any]:
+    def _sweep(self, base: np.ndarray, *, label: str, average_steps: int | None = None) -> list[Any]:
         samples = []
         for index, offset in enumerate(MEASUREMENT_OFFSETS, start=1):
             self.sim.set_viewer_status(label, f"pose {index}/{len(MEASUREMENT_OFFSETS)}")
@@ -156,8 +168,15 @@ class ComProbe:
             target[3:6] += offset
             if not self._settle(target):
                 raise RuntimeError(f"com probe: pose {index} did not come to rest")
-            samples.append(self._sample_here())
+            samples.append(self._sample_here(steps=average_steps))
         return samples
+
+    def _package_rotation(self) -> np.ndarray:
+        held = self._held
+        assert held is not None
+        rotation = np.empty(9)
+        self.sim.mujoco.mju_quat2Mat(rotation, np.asarray(held.quaternion, dtype=float))
+        return rotation.reshape(3, 3)
 
     # -- steps -------------------------------------------------------------------------
 
@@ -167,7 +186,7 @@ class ComProbe:
             raise RuntimeError("calibrate: the tool is holding a package")
         self.sim.set_viewer_status("Taring empty tool", "wrist force/torque")
         home = np.asarray(base if base is not None else self.sim.home, dtype=float)
-        return calibrate_tare(self._sweep(home, label="Taring empty tool"))
+        return calibrate_tare(self._sweep(home, label="Taring empty tool", average_steps=self.config.tare_average_steps))
 
     def grasp(self, index: int) -> HeldPackage:
         """Seal onto a package and rebuild the cell with it carried rigidly.
@@ -197,24 +216,62 @@ class ComProbe:
         self.sim.rebuild(None)
         self._held = None
 
-    def measure(self, index: int, tare: TareCalibration, *, lift: bool = True) -> PackageMeasurement:
-        """Hold the package in several orientations and solve its centre of mass."""
+    def measure(self, index: int, tare: TareCalibration, *, lift: bool | None = None) -> PackageMeasurement:
+        """Read the package. One plumb pose, or a tilted sweep if `precise` is on."""
         if self._held is None or self._held.index != index:
             raise RuntimeError("measure: the package must be grasped first")
         sim = self.sim
-        base = np.asarray(sim.data.qpos[sim.arm_qpos]).copy()
         package = sim.scenario.packages[index]
         label = f"Weighing {package.id}"
+        precise = self.config.precise
+        if lift is None:
+            lift = precise
+        started = float(sim.data.time)
+        base = np.asarray(sim.data.qpos[sim.arm_qpos]).copy()
         if lift:
-            # Measuring needs the package clear of everything it could lean on.
+            # Measuring with a tilted wrist needs the carton clear of everything it
+            # could lean on. A joint-space lift is what used to run on every package;
+            # it tilts the tool, so it stays off the in-situ path.
             sim.set_viewer_status(label, "lifting clear")
             base[1] -= self.config.lift_clearance
             self._settle(base)
             base = np.asarray(sim.data.qpos[sim.arm_qpos]).copy()
 
-        estimate = estimate_com(self._sweep(base, label=label), tare)
-        com_local = self._to_package_frame(estimate.com)
+        prior = np.asarray(self._held.position, dtype=float)
+        if precise:
+            sim.set_viewer_status(label, "tilted sweep")
+            samples = self._sweep(base, label=label)
+            method = "sweep"
+        else:
+            sim.set_viewer_status(label, "in situ")
+            samples = [self._sample_here()]
+            method = "in_situ"
+
+        estimate = estimate_com(samples, tare, prior=prior)
+        rotation = self._package_rotation()
         half = np.asarray(package.size, dtype=float) / 2.0
+        lean, hidden = 0.0, 0.0
+        if estimate.rank < 3:
+            lean, hidden = hidden_planar_error(estimate.blind_axis, rotation, half)
+            if hidden > HIDDEN_LIMIT_M and not precise:
+                sim.set_viewer_status(label, "blind axis tilted, sweeping")
+                lifted = np.asarray(sim.data.qpos[sim.arm_qpos]).copy()
+                lifted[1] -= self.config.lift_clearance
+                self._settle(lifted)
+                estimate = estimate_com(
+                    self._sweep(np.asarray(sim.data.qpos[sim.arm_qpos]).copy(), label=label),
+                    tare,
+                    prior=prior,
+                )
+                method = "sweep"
+                if estimate.rank < 3:
+                    lean, hidden = hidden_planar_error(estimate.blind_axis, rotation, half)
+                else:
+                    lean, hidden = 0.0, 0.0
+            if hidden > HIDDEN_LIMIT_M and estimate.reason == "ok":
+                estimate = replace(estimate, reason=TILTED)
+
+        com_local = rotation.T @ (estimate.com - prior)
         normalised = com_local / half
         return PackageMeasurement(
             package_id=package.id,
@@ -223,6 +280,10 @@ class ComProbe:
             com_local=tuple(float(value) for value in com_local),
             com_normalised=tuple(float(value) for value in normalised),
             estimate=estimate,
+            lean=lean,
+            hidden_m=hidden,
+            duration_s=float(sim.data.time) - started,
+            method=method,
         )
 
     def _to_package_frame(self, com_tool: np.ndarray) -> np.ndarray:
@@ -234,6 +295,5 @@ class ComProbe:
         """
         held = self._held
         assert held is not None
-        rotation = np.empty(9)
-        self.sim.mujoco.mju_quat2Mat(rotation, np.asarray(held.quaternion, dtype=float))
-        return rotation.reshape(3, 3).T @ (com_tool - np.asarray(held.position, dtype=float))
+        prior = np.asarray(held.position, dtype=float)
+        return self._package_rotation().T @ (com_tool - prior)

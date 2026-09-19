@@ -55,6 +55,8 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
         supply = make_supply(scene)
         scene.supply = supply
         supply.stage(scene)
+    if hasattr(gauge, "calibrate"):
+        gauge.calibrate(scene, arm)
     max_duration = float(scene.cfg["episode"]["max_duration_s"])
 
     for _ in range(episode.n_objects):

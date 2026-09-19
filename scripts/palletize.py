@@ -50,6 +50,11 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--label", default="UR10e · tres fuentes")
     cli.add_argument("--oracle-vision", action=argparse.BooleanOptionalAction, default=True)
     cli.add_argument("--oracle-gauge", action=argparse.BooleanOptionalAction, default=True)
+    cli.add_argument(
+        "--precise-com",
+        action="store_true",
+        help="inclina la muñeca en varias poses en vez de una lectura a plomo",
+    )
     cli.add_argument("--naive-planner", action="store_true")
     cli.add_argument("--score-planner", action="store_true",
                      help="usa heuristic.ScorePlanner cuando su equipo lo implemente")
@@ -84,7 +89,7 @@ def _select_level(cli: argparse.ArgumentParser, args, cfg: dict) -> int:
 
 def _parts(args, cfg: dict):
     detector = OracleDetector() if args.oracle_vision else CameraDetector()
-    gauge = OracleGauge() if args.oracle_gauge else WristGauge()
+    gauge = OracleGauge() if args.oracle_gauge else WristGauge(precise=args.precise_com)
     if args.naive_planner:
         planner = GridPlanner(cfg)
     elif args.score_planner:

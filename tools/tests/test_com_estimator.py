@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from stable_pallet.com_estimator import NO_PAYLOAD, OK, PARALLEL_POSES, SLIPPED, estimate_com, pose_condition
+from stable_pallet.com_estimator import (
+    NO_PAYLOAD,
+    OK,
+    PARALLEL_POSES,
+    SLIPPED,
+    estimate_com,
+    hidden_planar_error,
+    pose_condition,
+)
 from stable_pallet.tare import TareCalibration, calibrate_tare
 from stable_pallet.wrench import WrenchSample, average_wrench, skew
 
@@ -29,16 +37,48 @@ def _null_tare() -> TareCalibration:
 def test_two_tilted_poses_recover_the_centre_of_mass() -> None:
     com = np.array([0.012, -0.031, 0.163])
     samples = [_reading(8.5, com, gravity) for gravity in _tilted_gravities(2)]
-    estimate = estimate_com(samples, _null_tare())
+    estimate = estimate_com(samples, _null_tare(), prior=np.zeros(3))
     assert np.allclose(estimate.com, com, atol=1e-9)
     assert estimate.mass == pytest.approx(8.5, abs=1e-9)
     assert estimate.reason == OK
+    assert estimate.rank == 3
 
 
-def test_one_pose_is_rejected_because_the_system_has_rank_two() -> None:
-    samples = [_reading(8.5, np.array([0.01, 0.02, 0.16]), _tilted_gravities(1)[0])]
-    with pytest.raises(ValueError, match="need >= 2 poses"):
-        estimate_com(samples, _null_tare())
+def test_one_plumb_pose_recovers_the_horizontal_centre_and_keeps_the_prior() -> None:
+    true = np.array([0.01, 0.02, 0.16])
+    prior = np.array([0.00, 0.00, 0.18])
+    samples = [_reading(8.5, true, _tilted_gravities(1)[0])]
+    estimate = estimate_com(samples, _null_tare(), prior=prior)
+    assert estimate.com[0] == pytest.approx(true[0], abs=1e-9)
+    assert estimate.com[1] == pytest.approx(true[1], abs=1e-9)
+    assert estimate.com[2] == pytest.approx(prior[2], abs=1e-9)
+    assert estimate.mass == pytest.approx(8.5, abs=1e-9)
+    assert estimate.reason == OK
+    assert estimate.rank == 2
+
+
+def test_the_prior_does_not_pull_the_observable_plane() -> None:
+    """Truncation, not ridge: a wrong prior must leave the horizontal components exact."""
+    true = np.array([0.04, -0.03, 0.12])
+    prior = np.array([0.20, 0.20, 0.12])
+    samples = [_reading(8.5, true, np.array([0.0, 0.0, -GRAVITY]))]
+    estimate = estimate_com(samples, _null_tare(), prior=prior)
+    assert estimate.com[0] == pytest.approx(true[0], abs=1e-9)
+    assert estimate.com[1] == pytest.approx(true[1], abs=1e-9)
+
+
+def test_a_zero_prior_parks_the_unseen_component_at_the_sensor() -> None:
+    true = np.array([0.01, 0.02, 0.16])
+    samples = [_reading(8.5, true, np.array([0.0, 0.0, -GRAVITY]))]
+    estimate = estimate_com(samples, _null_tare(), prior=np.zeros(3))
+    assert estimate.com[2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_full_rank_solve_ignores_the_prior() -> None:
+    com = np.array([0.012, -0.031, 0.163])
+    samples = [_reading(8.5, com, gravity) for gravity in _tilted_gravities(3)]
+    estimate = estimate_com(samples, _null_tare(), prior=np.array([1.0, 1.0, 1.0]))
+    assert np.allclose(estimate.com, com, atol=1e-9)
 
 
 def test_moving_the_centre_of_mass_along_gravity_changes_no_reading() -> None:
@@ -72,6 +112,25 @@ def test_a_package_that_shifts_between_poses_is_flagged() -> None:
 def test_spread_poses_are_better_conditioned_than_close_ones() -> None:
     down = np.array([0.0, 0.0, -GRAVITY])
     assert pose_condition(_tilted_gravities(3)) < pose_condition([down, down + np.array([0.01, 0.0, 0.0])])
+
+
+def test_a_plumb_blind_axis_hides_nothing_in_the_plane() -> None:
+    lean, hidden = hidden_planar_error(
+        np.array([0.0, 0.0, 1.0]),
+        np.eye(3),
+        np.array([0.2, 0.15, 0.1]),
+    )
+    assert lean == pytest.approx(0.0, abs=1e-12)
+    assert hidden == pytest.approx(0.0, abs=1e-12)
+
+
+def test_a_tilted_blind_axis_leaks_the_half_height_into_the_plane() -> None:
+    angle = np.deg2rad(20.0)
+    blind = np.array([np.sin(angle), 0.0, np.cos(angle)])
+    half = np.array([0.2, 0.15, 0.1])
+    lean, hidden = hidden_planar_error(blind, np.eye(3), half)
+    assert lean == pytest.approx(np.sin(angle), abs=1e-9)
+    assert hidden == pytest.approx(float(np.abs(blind) @ half) * np.sin(angle), abs=1e-9)
 
 
 def test_tare_recovers_tool_mass_moment_and_offsets() -> None:
@@ -118,3 +177,10 @@ def test_averaging_refuses_to_mix_two_poses() -> None:
     samples = [_reading(8.5, np.zeros(3), gravity) for gravity in _tilted_gravities(2)]
     with pytest.raises(ValueError, match="same pose"):
         average_wrench(samples)
+
+
+def test_averaging_accepts_a_few_milliradians_of_creep() -> None:
+    down = np.array([0.0, 0.0, -GRAVITY])
+    angle = np.deg2rad(0.2)
+    crept = np.array([GRAVITY * np.sin(angle), 0.0, -GRAVITY * np.cos(angle)])
+    average_wrench([_reading(8.5, np.zeros(3), down), _reading(8.5, np.zeros(3), crept)])
