@@ -113,9 +113,9 @@ conveyor:
 # buena. Barriendo la herramienta por el piso, esa pared salió en x = +0.12 y la esquina
 # lejana fuera de alcance pasado y = -1.30; la bahía se queda corta de las dos.
 truck:
-  origin: [-0.51, -1.28]          # esquina cercana-izquierda del piso de carga
-  width: 0.63                     # a lo largo de X, hacia la cabina
-  depth: 0.82                     # a lo largo de Y
+  origin: [-0.62, -1.28]          # conserva x <= +0.12 en toda la bahía alcanzable
+  width: 0.74                     # m a lo largo de X; barrido IK: 0/720 fuera
+  depth: 0.88                     # m a lo largo de Y; barrido IK: 0/720 fuera
   floor_height: 0.02
   column_gap: 0.04
   max_stack_height: 0.86

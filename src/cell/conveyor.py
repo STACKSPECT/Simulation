@@ -218,51 +218,9 @@ class Belt(_BaseSupply):
         return None
 
 
-class TableSupply(_BaseSupply):
-    """Los bultos esperan colocados en la mesa. La fuente no se mueve.
-
-    Es el caso base y el que hacía el repo guionizado. Sigue sin ser trivial: el nivel
-    puede dejarlos girados y descentrados, así que la herramienta tiene que alinearse
-    con el cartón que va a sellar y no con la mesa.
-    """
-
-    def stage(self, scene) -> None:
-        cfg = scene.cfg["table"]
-        center_x, center_y = (float(v) for v in cfg["center"])
-        half_x, half_y, _ = (float(v) for v in cfg["size"])
-        top = float(cfg["height"])
-        jitter = scene.level.pos_jitter_m
-        spread = np.radians(scene.level.yaw_jitter_deg)
-
-        # Rejilla suelta sobre la mesa: caben en dos filas sin tocarse, y el nivel les
-        # añade su desvío encima.
-        columns = max(1, int(len(scene.boxes) ** 0.5 + 0.5))
-        step_x = (2 * half_x - 0.20) / max(1, columns - 1) if columns > 1 else 0.0
-        rows = int(np.ceil(len(scene.boxes) / columns))
-        step_y = (2 * half_y - 0.20) / max(1, rows - 1) if rows > 1 else 0.0
-
-        for box in scene.boxes:
-            column, row = box.index % columns, box.index // columns
-            x = center_x - (2 * half_x - 0.20) / 2 + column * step_x
-            y = center_y - (2 * half_y - 0.20) / 2 + row * step_y
-            if jitter > 0:
-                x += float(scene.rng.uniform(-jitter, jitter))
-                y += float(scene.rng.uniform(-jitter, jitter))
-            yaw = float(scene.rng.uniform(-spread, spread)) if spread > 0 else 0.0
-            scene.place_box(box.index, (x, y, top + box.dims_m[2] / 2 + 0.002), yaw)
-        scene.settle(0.4)
-
-    def present(self, scene) -> str | None:
-        """El siguiente de la mesa. No hay nada que mover, así que no puede atascarse."""
-        if not self.pending:
-            self.exhausted = True
-            return None
-        self.current = self.pending[0]
-        return scene.boxes[self.current].package_id
-
-
 def make_supply(scene) -> Supply:
     """La fuente que pide el nivel. Es la única elección que hace la tarea."""
+    from src.cell.table import TableSupply
     from src.cell.truck import TruckSupply
 
     return {

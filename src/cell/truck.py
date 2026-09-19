@@ -84,8 +84,8 @@ class TruckBay:
     """
 
     origin: tuple[float, float] = (-0.51, -1.28)
-    width: float = 0.63
-    depth: float = 0.82
+    width: float = 0.74
+    depth: float = 0.88
     floor_height: float = 0.02
     column_gap: float = 0.04
     max_stack_height: float = 0.86
