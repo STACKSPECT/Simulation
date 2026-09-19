@@ -95,6 +95,20 @@ table:
   friction: [0.9, 0.01, 0.001]
   rgba: [0.30, 0.33, 0.37, 1]
 
+# Mesa auxiliar común a los nueve niveles. No es una fuente: empieza vacía y queda
+# disponible para que el robot aparte un bulto si una estrategia futura lo necesita.
+#
+# Está a la derecha del palé, separada 50 mm de su canto (x=1.20), y por eso no falsea
+# ni la medida del montón ni `measure.on_pallet`. La superficie útil de 0.50 x 0.66 m
+# admite el bulto máximo del generador (0.55 x 0.40 m) girado 90 grados. Su centro se
+# comprobó con IK a la cota de suelta y a la de aproximación del bulto más alto.
+auxiliary_table:
+  center: [1.50, -0.05]
+  size: [0.25, 0.33, 0.04]        # SEMIEJES; huella x[1.25, 1.75], y[-0.38, 0.28]
+  height: 0.58
+  friction: [0.9, 0.01, 0.001]
+  rgba: [0.20, 0.38, 0.48, 1]
+
 # La cinta. `station` es donde el paquete se PARA para que el brazo lo coja, y está
 # dentro del alcance comprobado: coincide con el centro de la mesa, que es la pose de
 # agarre ya barrida con IK.

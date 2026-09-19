@@ -207,6 +207,7 @@ flowchart LR
         direction TB
         ARM["scene.py · arm.py"]
         SUP["table · conveyor · truck"]
+        AUX["auxiliary table<br>shared, empty"]
     end
     subgraph VIS["src/vision"]
         direction TB

@@ -505,6 +505,7 @@ def test_run_config_names_source_level_and_real_pallet() -> None:
     config = run_config(scene)
     assert config["pallet_size_m"] == [1.2, 0.8]
     assert config["source"] == "table" and config["level_name"] == "mesa"
+    assert config["auxiliary_table"] == CFG["auxiliary_table"]
 
 
 def main() -> int:
