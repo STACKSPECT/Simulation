@@ -20,7 +20,7 @@ el benchmark y el panel de control.
 | `shake.py` | 15 sacudidas de transporte (0,05–0,80 g en X, Y, Z) y ensayo de viga estrecha |
 | `benchmark.py` | Comparación determinista contra un *first-fit* |
 | `generator.py` | Sobre de cartón: 18-55 × 16-40 × 8-30 cm, 90-280 kg/m³, masa = densidad × volumen |
-| `webapp.py`, `runner.py`, `playback.py` | Panel de control en el navegador, con pausa y rebobinado |
+| `webapp.py`, `runner.py`, `playback.py` | Panel con ejecución real y depuración local, pausa y rebobinado |
 | `simulator.py` | La celda original, de la que se troceó `src/cell/` |
 
 ## Cómo se usa
@@ -35,6 +35,10 @@ uv run stable-pallet shake --instant-place --no-measure-com        # solo el pal
 uv run stable-pallet benchmark --trials 20                         # contra first-fit
 uv run pytest                                                      # 168 comprobaciones
 ```
+
+El panel muestra nueve tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
+modo. **EJECUCIÓN** llama a `scripts/palletize.py` y puede publicar telemetría.
+**DEPURACIÓN** llama al runner de este directorio y dice explícitamente que no publica.
 
 Los escenarios se buscan primero desde donde estés y después desde `tools/`, así que
 `scenarios/mixed_boxes.yaml` funciona igual desde la raíz del repo que desde aquí.
