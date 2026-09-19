@@ -7,7 +7,7 @@ import pytest
 from stable_pallet.controls import RunCancelled, ViewerControls
 from stable_pallet.playback import Playback
 from stable_pallet.scenario import load_scenario
-from stable_pallet.simulator import HeldPackage, PalletizingSimulator
+from stable_pallet.simulator import COM_PACKAGE_ALPHA, HeldPackage, PalletizingSimulator
 
 
 @pytest.fixture
@@ -94,6 +94,25 @@ def test_a_frame_carries_the_colours_the_run_had_set(cell) -> None:
     playback.restore(hidden)
 
     assert cell.model.geom_rgba[geom][3] == 0.0
+
+
+def test_com_translucency_is_not_saved_as_package_state(cell) -> None:
+    playback = _attach(cell)
+    cell._set_package_pose(0, (-0.85, 0.0, 0.95))
+    geom = cell._package_geom(0)
+    cell.controls.show_true_com = True
+    cell._update_com_package_translucency()
+    assert cell.model.geom_rgba[geom, 3] == pytest.approx(COM_PACKAGE_ALPHA)
+
+    frame = _record_now(playback)
+    row = [name for name, _geom in playback._appearance_entries()].index("package_geom_0")
+
+    assert playback.frames[frame].appearance[row, 3] == pytest.approx(1.0)
+    assert playback.snapshot().geom_rgba[geom, 3] == pytest.approx(1.0)
+
+    cell.controls.show_true_com = False
+    cell._update_com_package_translucency()
+    assert cell.model.geom_rgba[geom, 3] == pytest.approx(1.0)
 
 
 def test_reviewing_across_a_grasp_recompiles_the_cell(cell) -> None:

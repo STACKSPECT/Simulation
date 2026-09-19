@@ -92,7 +92,7 @@ class Playback:
         self._live_signature = _signature(simulator.mujoco, LIVE_FIELDS)
         self._steps_since_frame = 0
         self._appearance_names = [*simulator._appearance_geom_names(), "beam"]
-        self._appearance_cache: tuple[int, list[int]] | None = None
+        self._appearance_cache: tuple[int, list[tuple[str, int]]] | None = None
         self._shown: int | None = None
         self._carry = 0.0
         self._last_tick = time.monotonic()
@@ -115,7 +115,10 @@ class Playback:
         sim.mujoco.mj_getState(sim.model, sim.data, state, self._frame_signature)
         frame = Frame(
             state=state,
-            appearance=sim.model.geom_rgba[self._appearance_ids()].astype(np.float32),
+            appearance=np.asarray(
+                [sim._semantic_geom_rgba(name, geom) for name, geom in self._appearance_entries()],
+                dtype=np.float32,
+            ),
             held=sim.held_package,
             status=sim.viewer_status,
             sim_time=float(sim.data.time),
@@ -215,7 +218,7 @@ class Playback:
             eq_data=sim.model.eq_data.copy(),
             jnt_limited=sim.model.jnt_limited.copy(),
             jnt_range=sim.model.jnt_range.copy(),
-            geom_rgba=sim.model.geom_rgba.copy(),
+            geom_rgba=sim._semantic_model_rgba(),
             geom_contype=sim.model.geom_contype.copy(),
             geom_conaffinity=sim.model.geom_conaffinity.copy(),
         )
@@ -248,10 +251,16 @@ class Playback:
         self._appearance_cache = None
 
     def _appearance_ids(self) -> list[int]:
+        return [geom for _name, geom in self._appearance_entries()]
+
+    def _appearance_entries(self) -> list[tuple[str, int]]:
         model = self.sim.model
         if self._appearance_cache is not None and self._appearance_cache[0] == id(model):
             return self._appearance_cache[1]
-        ids = [self.sim._geom_id(name) for name in self._appearance_names]
-        ids = [geom for geom in ids if geom >= 0]
-        self._appearance_cache = (id(model), ids)
-        return ids
+        entries = [
+            (name, geom)
+            for name in self._appearance_names
+            if (geom := self.sim._geom_id(name)) >= 0
+        ]
+        self._appearance_cache = (id(model), entries)
+        return entries
