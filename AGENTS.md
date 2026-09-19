@@ -286,9 +286,11 @@ Dos avisos:
   inocuo) o no viaja. No inventes un kind: la fila la rechaza la base y se apaga la
   subida del resto del run.
 - **Un atasco se reporta como `timeout`.** No hay causa de fallo para "la fuente no
-  entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si entrega
-  pero la percepción no ve nada, es `no_detection`. Son cosas distintas y conviene no
-  mezclarlas, porque el gráfico de fallos las separa.
+  entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si el
+  cartón llega y no se asienta, también. Si entrega pero la percepción no ve nada, es
+  `no_detection`. Son cosas distintas y conviene no mezclarlas, porque el gráfico de
+  fallos las separa. En la cinta, PARA significa reposo medido: `present()` no
+  devuelve tras un settle fijo.
 
 ### El centro de gravedad
 
