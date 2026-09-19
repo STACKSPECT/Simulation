@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from stable_pallet.cli import build_parser
+from stable_pallet.controls import SPEED_SCALE
 from stable_pallet.scenario import load_scenario
 from stable_pallet.simulator import (
     HeldPackage,
@@ -299,7 +300,8 @@ def test_speed_paces_the_viewer_and_fast_forward_does_not_touch_it() -> None:
         load_scenario("scenarios/mixed_boxes.yaml"), simplified_graphics=True, measure_com=False
     )
     try:
-        timestep = simulator.model.opt.timestep
+        # Every label paces SPEED_SCALE times faster than it says: "x1" is x4 real time.
+        timestep = simulator.model.opt.timestep / SPEED_SCALE
         assert simulator.frame_pause == pytest.approx(timestep)
         simulator.controls.speed = 4.0
         assert simulator.frame_pause == pytest.approx(timestep / 4)
