@@ -306,14 +306,23 @@ class ArmController:
     # ── la ventosa ───────────────────────────────────────────────────────────
 
     def _held_offset_world(self, pose: Pose) -> np.ndarray:
-        """Dónde queda el bloque de ventosas activo respecto al origen de la herramienta.
+        """Cuánto está descentrado el cartón respecto al TCP, en el mundo.
 
-        Devuelve cero mientras no haya nada agarrado. Con una caja en la mano es lo que
-        hay que restar al destino para que el CARTÓN acabe donde se pidió, y no la brida.
+        Es lo que hay que restar al destino para que acabe donde se pidió el CARTÓN y no
+        la herramienta. Devuelve cero mientras no haya nada agarrado.
+
+        **Se MIDE al sellar, no se modela.** Antes salía del bloque de ventosas que el
+        plan de agarre decía activar, y eso sólo sería cierto si el brazo centrase las
+        ventosas sobre la caja: no lo hace, baja el TCP sobre el centro de la caja y sella
+        ahí, así que el cartón queda centrado bajo el TCP y la compensación estaba
+        corrigiendo un descentramiento inexistente. Medido en el nivel 12 con `book_s`:
+        offset modelado (-36.4, +25.5) mm y error final (-37.8, +22.6) mm — el error ERA
+        la compensación. Con `yaw` de 180° —el volteo que pide un CoG descentrado— el
+        offset se rota y el desvío se dobla, que es cuando saltaba.
         """
-        if self.grasp is None:
+        local = getattr(self, "held_local", None)
+        if local is None:
             return np.zeros(3)
-        local = self.reference[:2, :2] @ np.asarray(self.grasp.tool_offset, dtype=float)
         yaw = pose.yaw
         cosine, sine = math.cos(yaw), math.sin(yaw)
         return np.array([
@@ -379,6 +388,18 @@ class ArmController:
 
         self.held = index
         self.grasp = grasp
+        # Cuánto queda descentrado el cartón respecto al TCP, MEDIDO aquí y guardado en
+        # el frame de la herramienta para poder rotarlo al `yaw` de destino. Ver
+        # `_held_offset_world`: modelarlo desde el plan de agarre era corregir un
+        # descentramiento que esta maniobra de recogida no produce.
+        tcp = scene.data.site_xpos[scene.tcp_site]
+        delta = (scene.data.xpos[body] - tcp)[:2]
+        yaw = self.tcp_pose().yaw
+        cosine, sine = math.cos(-yaw), math.sin(-yaw)
+        self.held_local = np.array([
+            delta[0] * cosine - delta[1] * sine,
+            delta[0] * sine + delta[1] * cosine,
+        ])
         self.show_cups(grasp)
         scene.step(0.15)
         return self.is_holding()
@@ -425,6 +446,7 @@ class ArmController:
                 self.mujoco.mj_forward(self.scene.model, self.scene.data)
         self.held = None
         self.grasp = None
+        self.held_local = None
         self.scene.step(float(self.scene.cfg["motion"].get("release_settle_s", 0.15)))
 
     def is_holding(self) -> bool:

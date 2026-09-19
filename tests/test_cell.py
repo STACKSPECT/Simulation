@@ -97,7 +97,15 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
                     targets.append((station_x, station_y,
                                     scene.surface_z + box.dims_m[2] + arm.cup_gap, 0.0))
             else:
+                # Sólo los bultos que están PUESTOS. La mesa no da para todos —ocho
+                # sorteados suman más área que ella— y los que no caben esperan
+                # aparcados fuera de la escena, a x = -3 y más allá: pedirle al brazo que
+                # llegue hasta ahí no prueba nada sobre su alcance. Entran a la mesa
+                # cuando queda hueco, y entonces sí caen dentro de esta envolvente.
+                staged = getattr(supply, "slots", None)
                 for box in scene.boxes:
+                    if staged is not None and box.index not in staged:
+                        continue
                     top = scene.box_top_center(box.index)
                     targets.append((float(top[0]), float(top[1]),
                                     float(top[2]) + arm.cup_gap, scene.box_yaw(box.index)))

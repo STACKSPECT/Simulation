@@ -1104,6 +1104,39 @@ class PalletScene:
         """Deja que la escena se asiente. Medir antes de esto es medir cajas cayendo."""
         self.step(self.cfg["motion"]["settle_seconds"] if seconds is None else seconds)
 
+    def settle_until_rest(self, max_seconds: float = 4.0,
+                          threshold: float = 0.002) -> float:
+        """Asienta hasta que los bultos están QUIETOS, no durante un rato fijo.
+
+        Un tiempo fijo es una apuesta sobre cuánto tarda la escena en calmarse, y la
+        pierde en cuanto el nivel cambia: con el asentado de 0.4 s, el nivel 12 arrancaba
+        con 0.019 m/s de velocidad residual y el 13 con 3.89 m/s. Eso no es ruido, es que
+        las cajas siguen moviéndose mientras el brazo viaja —un par de segundos— y cuando
+        llega, la que vio la percepción ya no está donde estaba. Salía como si la ventosa
+        resbalase.
+
+        Devuelve los segundos simulados que hizo falta, para poder anotarlos.
+        """
+        step = 0.1
+        waited = 0.0
+        while waited < max_seconds:
+            self.step(step)
+            waited += step
+            if self.max_box_speed() < threshold:
+                break
+        return waited
+
+    def max_box_speed(self) -> float:
+        """La velocidad lineal del bulto que más se mueve, en m/s."""
+        fastest = 0.0
+        for box in self.boxes:
+            start = self.model.body_dofadr[self.body_id(box.index)]
+            if start < 0:
+                continue
+            speed = float(np.linalg.norm(self.data.qvel[start:start + 3]))
+            fastest = max(fastest, speed)
+        return fastest
+
     def _reload_viewer(self) -> None:
         """Mantiene la misma ventana GLFW cuando el árbol cinemático cambia al sellar."""
         if self.viewer is None:

@@ -210,6 +210,15 @@ def _pick(arm: ArmController, scene, box, observation) -> str | None:
     top[2] += observation.dims_guess[2] / 2
     seal_z = float(top[2]) + arm.cup_gap
     safe_z = max(float(motion["transit_height"]), seal_z + float(motion["place_clearance"]))
+    # Subir EN VERTICAL antes de viajar, igual que hace `_place`. Sin esto el brazo va
+    # directo desde donde estuviera, y como los waypoints se interpolan en juntas el TCP
+    # traza un arco que barre la fuente: medido en el nivel 12, la caja aparecía 23.8 mm
+    # desplazada y 5.8 mm hundida ANTES de sellar, y el episodio moría en
+    # `wrong_placement` por 2 mm de tolerancia. La caja no se escurría de la ventosa: el
+    # brazo la embestía al llegar.
+    current = arm.tcp_pose().position
+    if not arm.go_to(current[0], current[1], safe_z, observation.yaw):
+        return "ik_unreachable"
     if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
         return "ik_unreachable"
     if not arm.go_to(top[0], top[1], seal_z, observation.yaw, approach=True):

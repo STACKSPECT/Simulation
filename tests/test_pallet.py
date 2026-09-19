@@ -287,6 +287,60 @@ def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
     assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
 
 
+def test_the_table_lays_boxes_out_without_overlapping() -> None:
+    """La mesa reparte por la HUELLA de cada bulto, no por cuántos hay.
+
+    Repartir por número deja bultos solapados y colgando del canto, y eso no se ve como
+    un error de colocación: se ve como que al brazo se le escurre la caja. Medido, la
+    rejilla anterior arrancaba el nivel 12 con 0.019 m/s de velocidad residual y el 13
+    con 3.89 m/s —caída libre— y el bulto llegaba a la ventosa 23.8 mm corrido.
+
+    Lo que NO cabe se queda aparcado y entra después; fingir que cabe es lo que lo
+    mandaba al suelo.
+    """
+    from src.cell.table import GAP, TableSupply
+
+    boxes = [
+        SimpleNamespace(index=i, dims_m=dims, package_id=f"b{i}")
+        for i, dims in enumerate([
+            (0.42, 0.30, 0.18), (0.24, 0.18, 0.10), (0.48, 0.34, 0.22),
+            (0.55, 0.36, 0.26), (0.30, 0.22, 0.12), (0.45, 0.32, 0.20),
+        ])
+    ]
+    placed: dict[int, tuple[float, float, float]] = {}
+    scene = SimpleNamespace(
+        cfg=CFG, boxes=boxes,
+        level=SimpleNamespace(yaw_jitter_deg=0.0, pos_jitter_m=0.0),
+        rng=np.random.default_rng(0),
+        place_box=lambda index, pos, yaw: placed.__setitem__(index, pos),
+        settle_until_rest=lambda: None,
+    )
+    supply = TableSupply(scene)
+    supply.stage(scene)
+
+    assert placed, "no se colocó ni un bulto"
+    cfg = CFG["table"]
+    cx, cy = (float(v) for v in cfg["center"])
+    half_x, half_y, _ = (float(v) for v in cfg["size"])
+
+    rects = []
+    for index, (x, y, _z) in placed.items():
+        length, width, _ = boxes[index].dims_m
+        # Dentro de la mesa, entero: un bulto a medias sobre el canto se cae, y lo que
+        # se mide después es una caja en el suelo.
+        assert cx - half_x <= x - length / 2 and x + length / 2 <= cx + half_x, index
+        assert cy - half_y <= y - width / 2 and y + width / 2 <= cy + half_y, index
+        rects.append((x - length / 2, y - width / 2, length, width))
+
+    for i, a in enumerate(rects):
+        for b in rects[i + 1:]:
+            overlap_x = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+            overlap_y = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+            assert overlap_x <= -GAP + 1e-9 or overlap_y <= -GAP + 1e-9, (
+                f"bultos demasiado juntos: {a} y {b}"
+            )
+
+
 def test_depth_fuses_into_the_height_map() -> None:
     """La fusión, sin MuJoCo: un fotograma sintético cae en la celda que le toca.
 
