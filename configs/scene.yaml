@@ -78,7 +78,18 @@ vacuum:
   cup_gap: 0.0015
 
 table:
-  center: [-0.20, -0.66]
+  # APARTADA DEL PALÉ, y ése es el motivo del número. En [-0.20, -0.66] la mesa ocupaba
+  # x[-0.56, 0.16] y[-1.00, -0.32] y el palé empieza en x=0.00, y=-0.40: se pisaban en un
+  # rectángulo de 0.16 x 0.08 m sobre la esquina de la cubierta. Eso no se ve como un
+  # choque, se ve como que el brazo se empotra: el planificador puntúa esa esquina como
+  # el mejor hueco —baja, pegada al canto, apoyo 100 %— y la caja va contra la mesa. Se
+  # quedaba a 135 mm del destino y el episodio moría en `ik_unreachable`.
+  #
+  # En [-0.20, -0.80] la mesa acaba en y=-0.46 y deja 60 mm de aire hasta el palé. La
+  # estación queda a 0.80 m del pedestal, dentro de la envolvente medida (ver el barrido
+  # de alcance en `configs/pallet.yaml`). Sólo afecta a los niveles de mesa: cinta y
+  # camión tienen su propia fuente y no coexisten con ella en la escena.
+  center: [-0.20, -0.80]
   size: [0.36, 0.34, 0.29]        # SEMIEJES (lo que quiere MuJoCo)
   height: 0.58                    # z de la superficie
   friction: [0.9, 0.01, 0.001]

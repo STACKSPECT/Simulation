@@ -222,10 +222,27 @@ heuristic:
                                  # que es lo honesto mientras no haya catálogo fijo.
   yaws: [0.0, 90.0]              # GRADOS. `placing` añade 180/270 solo, cuando el CoG
                                  # del paquete está descentrado y el giro cambia algo.
-  # El filtro de alcance va APAGADO a propósito: el adaptador no le pasa `robot_xy`, así
-  # que `reachability` queda neutro (1.0 en todas las poses) y `out_of_reach` no descarta
-  # ninguna. Las cifras de alcance de la feature son de un Panda y aquí el robot es un
-  # UR10e: hay que barrer el IK y medirlas (AGENTS.md §7), no copiarlas.
+  # ── ALCANCE: SIGUE APAGADO, Y AHORA SE SABE POR QUÉ CUESTA MEDIRLO ──────────────
+  # Se intentó encenderlo con un barrido propio y el barrido estaba MAL. Con la mano
+  # vacía sale que el brazo sostiene hasta 1.203 m y que sólo falla pegado al pedestal
+  # y abajo (primer fallo a 0.373 m, todas buenas desde 0.447 m). Pero repetido CON LA
+  # CAJA EN LA MANO, ninguna de las 32 poses a 0.10 m sobre la cubierta es alcanzable
+  # —0/32, a cualquier distancia y con la muñeca a 0 o a 180°—, y eso no es alcance: es
+  # que la caja cuelga POR DEBAJO de la cara de las ventosas, así que pedir el TCP a
+  # 0.10 m con un bulto de 0.18 m mete el cartón dentro de la cubierta. La pose no
+  # existe. Medir el alcance del brazo cargado exige poner el TCP donde lo pone la
+  # maniobra de verdad —tapa de la caja más `cup_gap` más `drop_clearance`— y eso es un
+  # barrido aparte.
+  #
+  # Encenderlo con las cifras de la mano vacía arregla el nivel 32 y ROMPE el 31 (1/5,
+  # `ik_unreachable`), así que se queda apagado: `reach_max: 0` desactiva el filtro y
+  # deja `reachability` neutro. Con él apagado, los nueve niveles van como dice el
+  # README. Cuando se mida bien, se enciende poniendo `robot_xy` y `reach_max`.
+  # robot_xy: [0.60, -0.72]      # el pedestal, de `scene.yaml: robot.base_pos`
+  reach_max: 0.0                 # 0 = filtro apagado
+  reach_min: 0.0
+  reach_knee: 0.25
+  reach_falloff: 0.0
   weights:                       # los 14 términos de `placing`. NO suman 1, y no tienen
                                  # que sumarlo: el score se normaliza dividiendo por la
                                  # suma de pesos, y sale en [0,1] igual.
@@ -242,7 +259,24 @@ heuristic:
     edge_flush: 0.4              # romper alineaciones de esquina
     lateral_proximity: 0.3       # apoyarse contra vecinos o el canto
     seam_break: 0.2              # evitar juntas corridas
-    pallet_com: 0.0              # acercar el CoG del montón al centro del palé
+    pallet_com: 0.8              # acercar el CoG del montón al centro del palé.
+                                 # MEDIDO AQUÍ, y es el término que más cambia lo que se
+                                 # ve. A 0 —el defecto de la feature— el desempate de
+                                 # `placing` va por x ascendente, así que con huecos
+                                 # empatados todo se amontona contra el canto de menor x
+                                 # y la mitad del europalé se queda vacía. Barrido en el
+                                 # nivel 11, semilla 1, midiendo el CoG del montón
+                                 # respecto al centro del palé y el ancho aprovechado:
+                                 #
+                                 #   peso   CoG    ancho       margen
+                                 #   0.0    287mm  0.65/1.20   257mm
+                                 #   0.4    154mm  0.88/1.20   216mm
+                                 #   0.8     10mm  1.00/1.20   305mm   <- aquí
+                                 #   1.5     91mm  1.11/1.20   209mm
+                                 #
+                                 # A 1.5 se pasa de frenada. En N2 el CoG baja de 151 a
+                                 # 70 mm y el margen sube de 293 a 315; en N3 baja de 157
+                                 # a 110 mm. Los tres siguen en verde.
     # Tres notas para quien toque esta tabla:
     #
     #   - `bridge` y `gap_waste` tiran en dirección contraria a `void_fill`. Un puente

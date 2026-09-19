@@ -1,29 +1,36 @@
-"""Fuente de mesa: los bultos esperan inmóviles hasta que el robot los recoge.
+"""Fuente de mesa: un bulto preparado, y el siguiente entra cuando se lo llevan.
 
-── POR QUÉ ESTO NO ES UNA REJILLA ───────────────────────────────────────────────
+── POR QUÉ UNO, Y NO LA MESA LLENA ──────────────────────────────────────────────
 
-Lo era, y repartía la mesa entre el NÚMERO de cajas sin mirar cuánto medían. Con un
-catálogo de un solo tipo colaba; en cuanto el nivel mezcla tamaños, no:
+Estaba llena, repartida en rejilla entre el NÚMERO de bultos y sin mirar cuánto medían.
+Eso daba tres cosas, y ninguna se veía como lo que era:
 
-  - Nivel 12, seis tipos distintos: la separación en Y salía de 240 mm para cajas de
-    hasta 340 mm de fondo. Se empujaban entre ellas y **seguían deslizándose cuando el
-    episodio ya había empezado** —0.019 m/s medidos tras el asentado—, así que la caja ya
-    no estaba donde se la vio: llegaba a la ventosa 23.8 mm corrida y el episodio moría
-    en `wrong_placement` por 2 mm de tolerancia.
-  - Nivel 13, ocho cajas sorteadas de hasta 550 mm: la mitad quedaba colgando del canto.
-    Velocidad residual tras el asentado, **3.89 m/s**, que es caída libre.
+  - **Bultos solapados.** Nivel 12, seis tipos: 240 mm de separación para cajas de 340 mm
+    de fondo. Seguían deslizándose con el episodio ya empezado —0.019 m/s tras el
+    asentado— así que la caja llegaba a la ventosa 23.8 mm corrida y el episodio moría en
+    `wrong_placement` por 2 mm de tolerancia. Parecía que se escurría de la ventosa.
+  - **Bultos colgando del canto.** Nivel 13, ocho sorteados de hasta 550 mm: velocidad
+    residual 3.89 m/s, que es caída libre.
+  - **Y el vecino por los aires.** Éste sólo sale con movimiento real; en fast-forward el
+    brazo teletransporta y no se ve. Al extraer un bulto, el que lleva en la mano barre
+    al de al lado y lo tira al suelo.
 
-El síntoma parecía del brazo —"se le escurre la caja"— y no lo era. Por eso aquí se
-coloca por la HUELLA de cada bulto y se asienta hasta reposo de verdad, no durante un
-tiempo fijo.
+Esto último es lo que decide el diseño, porque **no tiene arreglo con más holgura**. La
+mesa mide 0.72 x 0.68 m útiles. Dos `std_m` (0.42 x 0.30) sólo entran de canto en Y, y
+ahí la holgura máxima que cabe son 80 mm:
 
-── Y POR QUÉ NO CABEN TODAS ─────────────────────────────────────────────────────
+    holgura   vecina tras extraer      cabe en la mesa
+     30 mm    384 mm, al suelo         sí
+     80 mm    385 mm, al suelo         sí (al límite)
+    150 mm    —                        NO, se sale del canto
 
-La mesa tiene 0.72 x 0.68 m útiles. Ocho bultos del generador suman más área que eso, así
-que no es cuestión de colocarlos mejor: **no caben**. Los que no caben esperan aparcados
-fuera de la escena y entran en el hueco que deja el anterior, que es lo que hace un
-operario cuando la mesa está llena. La alternativa —fingir que caben— es la que los
-mandaba al suelo.
+Es decir: la holgura que hace falta para extraer sin tocar es mayor que la que cabe. Con
+esta mesa y esta herramienta, la única configuración que no derriba nada es **un bulto**.
+El resto espera aparcado fuera de la escena y entra cuando el anterior se va, que es lo
+que hace un operario con una mesa pequeña.
+
+Si se quiere la mesa llena, lo que hay que cambiar es la mesa —o sacar el bulto por
+arriba antes de trasladar—, no el número de la holgura.
 """
 
 from __future__ import annotations
@@ -32,106 +39,48 @@ import numpy as np
 
 from src.cell.conveyor import _BaseSupply
 
-# Separación entre bultos vecinos en la mesa. No es la del palé: aquí no la impone la
-# herramienta sino el asentado, y con menos de esto dos cajas con `yaw_jitter` se tocan
-# por las esquinas y se empujan durante todo el episodio.
-GAP = 0.03
-
 
 class TableSupply(_BaseSupply):
-    """Caso base: presentar un paquete no altera su pose sobre la mesa."""
+    """Un bulto preparado en el centro de la mesa. Presentarlo no lo mueve."""
 
     def stage(self, scene) -> None:
         cfg = scene.cfg["table"]
-        center_x, center_y = (float(v) for v in cfg["center"])
+        self.center = tuple(float(v) for v in cfg["center"])
         half_x, half_y, _ = (float(v) for v in cfg["size"])
+        self.half = (half_x, half_y)
         self.top = float(cfg["height"])
         self.spread = np.radians(scene.level.yaw_jitter_deg)
         self.jitter = scene.level.pos_jitter_m
-        self.area = (center_x - half_x, center_y - half_y, 2 * half_x, 2 * half_y)
-        self.cursor = (0.0, 0.0, 0.0)
-
-        self.slots: dict[int, tuple[float, float]] = {}
-        for box in scene.boxes:
-            slot = self._next_slot(box)
-            if slot is None:
-                break                      # la mesa se llenó; el resto espera aparcado
-            self.slots[box.index] = slot
-            self._put(scene, box, slot)
+        self.staged: int | None = None
+        if scene.boxes:
+            self._put(scene, scene.boxes[0])
         scene.settle_until_rest()
 
     def present(self, scene) -> str | None:
-        """Devuelve el siguiente bulto sin moverlo; una mesa no puede atascarse."""
+        """Devuelve el bulto de la mesa; una mesa no puede atascarse."""
         if not self.pending:
             self.exhausted = True
             return None
         self.current = self.pending[0]
-        box = scene.boxes[self.current]
-        if self.current not in self.slots:
-            # No cabía cuando se preparó la mesa. Entra ahora, en el hueco que dejó el
-            # anterior, y se le deja asentar antes de que nadie lo mire.
-            slot = self._recycle_slot(box)
-            if slot is None:
-                return None                # sin hueco: la espera expira como `timeout`
-            self.slots[self.current] = slot
-            self._put(scene, box, slot)
+        if self.staged != self.current:
+            self._put(scene, scene.boxes[self.current])
             scene.settle_until_rest()
-        return box.package_id
+        return scene.boxes[self.current].package_id
 
-    # ── colocar sin pisarse ──────────────────────────────────────────────────
-
-    def _footprint(self, box) -> tuple[float, float]:
-        """La huella con el giro contado: `yaw_jitter` la ensancha, y hay que pagarlo."""
-        length, width, _ = box.dims_m
-        cosine, sine = abs(np.cos(self.spread)), abs(np.sin(self.spread))
-        span_x = length * cosine + width * sine
-        span_y = length * sine + width * cosine
-        pad = GAP + 2 * self.jitter
-        return float(span_x) + pad, float(span_y) + pad
-
-    def _next_slot(self, box) -> tuple[float, float] | None:
-        """Empaquetado por estantes: se llena una fila y se baja a la siguiente."""
-        span_x, span_y = self._footprint(box)
-        origin_x, origin_y, width, depth = self.area
-        cursor_x, cursor_y, row_depth = self.cursor
-        if cursor_x + span_x > width:                      # no cabe en esta fila
-            cursor_x, cursor_y, row_depth = 0.0, cursor_y + row_depth, 0.0
-        if cursor_x + span_x > width or cursor_y + span_y > depth:
-            return None                                    # ni en la mesa
-        slot = (origin_x + cursor_x + span_x / 2, origin_y + cursor_y + span_y / 2)
-        self.cursor = (cursor_x + span_x, cursor_y, max(row_depth, span_y))
-        return slot
-
-    def _recycle_slot(self, box) -> tuple[float, float] | None:
-        """Un hueco libre para esta caja: el de la anterior, o la mesa entera si está vacía.
-
-        Exigir el hueco EXACTO de la que se fue no vale con bultos sorteados: el
-        siguiente casi nunca es del mismo tamaño y la mesa se quedaba sin poder servir
-        nada, que salía como `timeout` cuando lo que pasaba es que sobraba sitio.
-        """
-        span_x, span_y = self._footprint(box)
-        origin_x, origin_y, width, depth = self.area
-        half_x, half_y = span_x / 2, span_y / 2
-        for index, slot in list(self.slots.items()):
-            if index in self.pending and index != self.current:
-                continue                                   # sigue ocupado
-            if (origin_x <= slot[0] - half_x and slot[0] + half_x <= origin_x + width
-                    and origin_y <= slot[1] - half_y
-                    and slot[1] + half_y <= origin_y + depth):
-                del self.slots[index]
-                return slot
-        # Nada reutilizable. Si no queda ningún bulto puesto, la mesa está libre entera y
-        # se reparte de cero; si queda alguno, no hay sitio y la espera expirará.
-        if any(index in self.pending and index != self.current for index in self.slots):
-            return None
-        self.slots.clear()
-        self.cursor = (0.0, 0.0, 0.0)
-        return self._next_slot(box)
-
-    def _put(self, scene, box, slot: tuple[float, float]) -> None:
-        x, y = slot
+    def _put(self, scene, box) -> None:
+        """Al centro de la mesa, que es donde más canto le queda por los cuatro lados."""
+        x, y = self.center
         if self.jitter > 0:
             x += float(scene.rng.uniform(-self.jitter, self.jitter))
             y += float(scene.rng.uniform(-self.jitter, self.jitter))
-        yaw = float(scene.rng.uniform(-self.spread, self.spread)) if self.spread > 0 else 0.0
+        yaw = float(scene.rng.uniform(-self.spread, self.spread)) if self.spread else 0.0
         scene.place_box(box.index, (x, y, self.top + box.dims_m[2] / 2 + 0.002), yaw)
+        self.staged = box.index
+
+    def fits(self, box) -> bool:
+        """Si el bulto cabe entero en la mesa. Uno que sobresale se cae y se mide en el suelo."""
+        cosine, sine = abs(np.cos(self.spread)), abs(np.sin(self.spread))
+        span_x = box.dims_m[0] * cosine + box.dims_m[1] * sine
+        span_y = box.dims_m[0] * sine + box.dims_m[1] * cosine
+        return (span_x / 2 + self.jitter <= self.half[0]
+                and span_y / 2 + self.jitter <= self.half[1])

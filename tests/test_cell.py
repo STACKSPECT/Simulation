@@ -102,9 +102,9 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
                 # aparcados fuera de la escena, a x = -3 y más allá: pedirle al brazo que
                 # llegue hasta ahí no prueba nada sobre su alcance. Entran a la mesa
                 # cuando queda hueco, y entonces sí caen dentro de esta envolvente.
-                staged = getattr(supply, "slots", None)
+                staged = getattr(supply, "staged", -1)
                 for box in scene.boxes:
-                    if staged is not None and box.index not in staged:
+                    if staged != -1 and box.index != staged:
                         continue
                     top = scene.box_top_center(box.index)
                     targets.append((float(top[0]), float(top[1]),

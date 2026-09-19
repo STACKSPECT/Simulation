@@ -89,6 +89,9 @@ class ScorePlanner:
                 # cifra escala además `lowness`: el porqué, en `configs/pallet.yaml`.
                 max_stack_height=self.deck_z + float(cfg["max_stack_height"]),
                 yaws=tuple(float(v) for v in cfg["yaws"]),
+                reach_min=float(cfg["reach_min"]),
+                reach_knee=float(cfg["reach_knee"]),
+                reach_falloff=float(cfg["reach_falloff"]),
             ),
             scoring=ScoringConfig(
                 weights={str(k): float(v) for k, v in cfg["weights"].items()},
@@ -98,10 +101,13 @@ class ScorePlanner:
             ),
             # El mapa ya llega con la celda de `cell_size`: no hay nada que remuestrear.
             resolution=None,
-            # `robot_xy` SIN PONER a propósito: sin él, `reachability` queda neutro y
-            # `out_of_reach` no descarta nada. Las cifras de alcance de la feature son de
-            # un Panda y aquí el robot es un UR10e — hay que barrer el IK y medirlas
-            # (AGENTS.md §7), no copiarlas.
+            # El alcance va en el planner, no sólo en `FeasibilityConfig`: `placing` sólo
+            # convierte `reach_max` en filtro duro cuando el planner trae `robot_xy`.
+            # Ponerlo únicamente en la config deja `reach_max` a 0 y el filtro apagado en
+            # silencio. Las cifras están medidas en esta celda: ver `configs/pallet.yaml`.
+            robot_xy=(tuple(float(v) for v in cfg["robot_xy"])
+                      if cfg.get("robot_xy") and float(cfg["reach_max"]) > 0 else None),
+            max_reach=float(cfg["reach_max"]),
         )
 
         # El CoG del montón, acumulado de lo que la física dejó, no de lo planificado.

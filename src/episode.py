@@ -216,9 +216,13 @@ def _pick(arm: ArmController, scene, box, observation) -> str | None:
     # desplazada y 5.8 mm hundida ANTES de sellar, y el episodio moría en
     # `wrong_placement` por 2 mm de tolerancia. La caja no se escurría de la ventosa: el
     # brazo la embestía al llegar.
+    #
+    # Y es un waypoint DE CONVENIENCIA: si no sale, se sigue. Subir en vertical desde
+    # donde esté el brazo puede quedar fuera de alcance —lejos del pedestal, la cota de
+    # tránsito se va de la envolvente— y abortar la recogida por no poder hacer el rodeo
+    # bonito es peor que hacer el rodeo feo.
     current = arm.tcp_pose().position
-    if not arm.go_to(current[0], current[1], safe_z, observation.yaw):
-        return "ik_unreachable"
+    arm.go_to(current[0], current[1], safe_z, observation.yaw)
     if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
         return "ik_unreachable"
     if not arm.go_to(top[0], top[1], seal_z, observation.yaw, approach=True):

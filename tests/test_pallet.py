@@ -287,58 +287,54 @@ def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
     assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
 
 
-def test_the_table_lays_boxes_out_without_overlapping() -> None:
-    """La mesa reparte por la HUELLA de cada bulto, no por cuántos hay.
+def test_the_table_stages_one_box_at_a_time() -> None:
+    """La mesa prepara UN bulto, y el siguiente entra cuando se llevan el anterior.
 
-    Repartir por número deja bultos solapados y colgando del canto, y eso no se ve como
-    un error de colocación: se ve como que al brazo se le escurre la caja. Medido, la
-    rejilla anterior arrancaba el nivel 12 con 0.019 m/s de velocidad residual y el 13
-    con 3.89 m/s —caída libre— y el bulto llegaba a la ventosa 23.8 mm corrido.
+    No es una simplificación: es lo único que cabe. La mesa mide 0.72 x 0.68 m útiles y
+    dos `std_m` sólo entran con 80 mm de holgura como mucho; con esa holgura, al extraer
+    uno el que va en la mano barre al vecino y lo tira al suelo (385 mm medidos), y la
+    holgura que haría falta para no tocarlo ya no cabe en la mesa. Con la mesa llena, eso
+    salía como que al brazo se le escurría la caja.
 
-    Lo que NO cabe se queda aparcado y entra después; fingir que cabe es lo que lo
-    mandaba al suelo.
+    Sólo se ve con movimiento real: en fast-forward el brazo teletransporta entre
+    waypoints y no barre nada.
     """
-    from src.cell.table import GAP, TableSupply
+    from src.cell.table import TableSupply
 
     boxes = [
         SimpleNamespace(index=i, dims_m=dims, package_id=f"b{i}")
-        for i, dims in enumerate([
-            (0.42, 0.30, 0.18), (0.24, 0.18, 0.10), (0.48, 0.34, 0.22),
-            (0.55, 0.36, 0.26), (0.30, 0.22, 0.12), (0.45, 0.32, 0.20),
-        ])
+        for i, dims in enumerate([(0.42, 0.30, 0.18), (0.24, 0.18, 0.10),
+                                  (0.55, 0.36, 0.26)])
     ]
-    placed: dict[int, tuple[float, float, float]] = {}
+    puestas: dict[int, tuple[float, float, float]] = {}
     scene = SimpleNamespace(
         cfg=CFG, boxes=boxes,
         level=SimpleNamespace(yaw_jitter_deg=0.0, pos_jitter_m=0.0),
         rng=np.random.default_rng(0),
-        place_box=lambda index, pos, yaw: placed.__setitem__(index, pos),
+        place_box=lambda index, pos, yaw: puestas.__setitem__(index, pos),
         settle_until_rest=lambda: None,
     )
     supply = TableSupply(scene)
     supply.stage(scene)
+    assert list(puestas) == [0], f"la mesa debe preparar uno solo: {list(puestas)}"
 
-    assert placed, "no se colocó ni un bulto"
     cfg = CFG["table"]
     cx, cy = (float(v) for v in cfg["center"])
     half_x, half_y, _ = (float(v) for v in cfg["size"])
-
-    rects = []
-    for index, (x, y, _z) in placed.items():
+    for index, (x, y, _z) in puestas.items():
         length, width, _ = boxes[index].dims_m
-        # Dentro de la mesa, entero: un bulto a medias sobre el canto se cae, y lo que
-        # se mide después es una caja en el suelo.
+        # Entero dentro de la mesa: uno a medias sobre el canto se cae, y lo que se mide
+        # despues es una caja en el suelo.
         assert cx - half_x <= x - length / 2 and x + length / 2 <= cx + half_x, index
         assert cy - half_y <= y - width / 2 and y + width / 2 <= cy + half_y, index
-        rects.append((x - length / 2, y - width / 2, length, width))
 
-    for i, a in enumerate(rects):
-        for b in rects[i + 1:]:
-            overlap_x = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
-            overlap_y = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
-            assert overlap_x <= -GAP + 1e-9 or overlap_y <= -GAP + 1e-9, (
-                f"bultos demasiado juntos: {a} y {b}"
-            )
+    # El segundo entra al presentarlo, no antes, y en el sitio que dejó el primero.
+    assert supply.present(scene) == "b0"
+    assert list(puestas) == [0], "presentar el que ya está puesto no mueve nada"
+    supply.release(scene)                      # el brazo se lo llevó
+    assert supply.present(scene) == "b1"
+    assert list(puestas) == [0, 1]
+    assert puestas[1][:2] == puestas[0][:2]
 
 
 def test_depth_fuses_into_the_height_map() -> None:
