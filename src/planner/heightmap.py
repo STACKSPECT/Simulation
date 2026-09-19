@@ -112,8 +112,11 @@ def _stamp_static_obstacles(scene, cells, origin, cell, nx, ny) -> None:
     oráculo cuente la MISMA verdad: si las dos medidas discrepan, la comparación entre
     correr con percepción y correr sin ella deja de significar nada.
 
-    La cinta y el remolque no hacen falta aquí: ninguno se solapa con la huella del palé
-    (la cinta acaba en x=-0.15, el remolque en y=-0.40, justo en el borde).
+    La cinta y el remolque no hacen falta aquí: ninguno se solapa con la huella del palé.
+    El remolque acaba en y=-0.40, justo en el borde. La cinta ya no se libra por la X
+    —se alargó hasta x=+0.15 para que el cartón no pare volando sobre el canto— sino por
+    la Y: ocupa y∈[-1.05, -0.55] y deja 150 mm hasta la cubierta. Ése es el motivo de que
+    bajase a y=-0.80 al alargarla; si alguien la sube, esto deja de ser cierto.
     """
     table = scene.cfg.get("table")
     if not table:

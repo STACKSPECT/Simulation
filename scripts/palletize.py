@@ -38,7 +38,8 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--level", type=int)
     cli.add_argument("--viewer", action="store_true")
     cli.add_argument("--speed", type=float,
-                     help="0 = fast-forward; por defecto 1 con visor y 0 sin visor")
+                     help="segundos simulados por segundo real en el visor; "
+                          "0 = fast-forward. Por defecto 1 con visor y 0 sin visor")
     cli.add_argument("--pause", type=float, default=0.0,
                      help="segundos de pausa entre episodios")
     cli.add_argument("--show-com", action="store_true",
