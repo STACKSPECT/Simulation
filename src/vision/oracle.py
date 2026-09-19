@@ -19,19 +19,47 @@ mirar el estado del simulador.
 
 from __future__ import annotations
 
+import numpy as np
+
 from src.contracts import Observation, PackageSpec
 
-# A implementar cuando exista `cell/scene.py` (portado) y `cell/conveyor.py`:
-#
-#   class OracleDetector:
-#       """Devuelve la caja que la cinta tiene parada en la estación, sin mirar imagen
-#       ninguna. `confidence=1.0` y `dims_guess` = las dimensiones reales."""
-#       def observe(self, scene) -> list[Observation]: ...
-#
-#   class OracleGauge:
-#       """Lee `dims`, `mass` y `cog_offset` del catálogo de la escena. No mide nada."""
-#       def measure(self, scene, arm, observation) -> PackageSpec: ...
-#
-# Son diez líneas cada uno. Lo que no puede pasar es que se queden y se olviden: en
-# cuanto exista la implementación buena, el stub sigue aquí para poder comparar, pero
-# deja de ser el de por defecto en `scripts/palletize.py`.
+
+class OracleDetector:
+    """Devuelve sin error el paquete que la fuente tiene presentado."""
+
+    def observe(self, scene) -> list[Observation]:
+        current = getattr(scene.supply, "current", None)
+        if current is None:
+            return []
+        box = scene.boxes[current]
+        position, _ = scene.box_pose(current)
+        return [Observation(
+            package_id=box.package_id,
+            position=position,
+            yaw=scene.box_yaw(current),
+            dims_guess=box.dims_m,
+            confidence=1.0,
+        )]
+
+
+class OracleGauge:
+    """Lee dimensiones, masa y CoG de la verdad interna de la escena."""
+
+    def measure(self, scene, arm, observation: Observation) -> PackageSpec:
+        box = next(box for box in scene.boxes if box.package_id == observation.package_id)
+        return self._spec(box)
+
+    def forecast(self, scene, package_ids: list[str]) -> list[PackageSpec]:
+        """Da al lookahead oráculo las especificaciones de la carga aún no medida."""
+        boxes = {box.package_id: box for box in scene.boxes}
+        return [self._spec(boxes[package_id]) for package_id in package_ids]
+
+    @staticmethod
+    def _spec(box) -> PackageSpec:
+        return PackageSpec(
+            package_id=box.package_id,
+            type_name=box.type_name,
+            dims_m=box.dims_m,
+            mass_kg=box.mass_kg,
+            cog_offset_m=np.asarray(box.cog_offset_m, dtype=float),
+        )

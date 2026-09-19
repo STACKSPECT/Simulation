@@ -1,0 +1,82 @@
+name: ecommerce-parcels-euro-pallet
+pallet:
+  width: 1.20
+  depth: 0.80
+  max_height: 1.35
+  max_mass: 350.0
+
+planner:
+  minimum_support_ratio: 0.62
+  minimum_tipping_margin: 0.008
+  beam_width: 20
+  lookahead: 3
+  candidates_per_node: 40
+  placement_clearance: 0.040
+  heightmap_resolution: [12, 10]
+  weights:
+    support: 3.5
+    tipping_margin: 2.5
+    centered_com: 2.2
+    low_height: 1.1
+    compactness: 1.0
+    regular_surface: 0.8
+
+simulation:
+  pallet_origin: [0.00, -0.40]
+  pallet_height: 0.144
+  infeed_position: [-0.20, -0.66]
+  infeed_height: 0.58
+  settle_seconds: 1.25
+  position_noise_std: 0.0
+  friction: 0.95
+  shake:
+    # 0.05 g creep, 0.15 g gentle accel, 0.30 g forklift/urban brake,
+    # 0.50 g EN 12195-1 lateral/rear, 0.80 g EN 12195-1 forward.
+    levels_g: [0.05, 0.15, 0.30, 0.50, 0.80]
+    axes: [x, y, z]
+    duration: 0.50
+    settle_seconds: 1.5
+    hold_seconds: 0.5
+    rest_seconds: 0.35
+    max_shift_m: 0.030
+    # 10 cm ridge: the loaded pallet has to balance, first along X, then along Y.
+    beam_width: 0.10
+    beam_height: 0.05
+    beam_settle_seconds: 2.0
+    max_tilt_deg: 8.0
+
+packages:
+  # Mix representative of small and large standard e-commerce parcels. The
+  # heaviest box plus the 2.55 kg OnRobot VGP20 stays below the UR10e 12.5 kg payload.
+  - id: AMZ-BOOK-S
+    size: [0.24, 0.18, 0.10]
+    mass: 1.2
+    com: [0.025, -0.010, 0.000]
+  - id: AMZ-SHOE-M
+    size: [0.33, 0.24, 0.14]
+    mass: 2.4
+    com: [-0.035, 0.015, -0.010]
+  - id: AMZ-STD-M
+    size: [0.42, 0.30, 0.18]
+    mass: 4.2
+    com: [0.050, 0.000, 0.010]
+  - id: AMZ-STD-L
+    size: [0.48, 0.34, 0.22]
+    mass: 6.2
+    com: [0.000, -0.040, -0.025]
+  - id: AMZ-HEAVY-L
+    size: [0.55, 0.36, 0.26]
+    mass: 8.5
+    com: [-0.060, 0.035, -0.035]
+  - id: AMZ-STD-S
+    size: [0.38, 0.28, 0.16]
+    mass: 3.5
+    com: [0.020, 0.020, -0.015]
+  - id: AMZ-APPAREL
+    size: [0.45, 0.32, 0.20]
+    mass: 5.4
+    com: [-0.030, -0.025, 0.000]
+  - id: AMZ-SMALL
+    size: [0.30, 0.22, 0.12]
+    mass: 1.8
+    com: [0.025, 0.000, 0.000]
