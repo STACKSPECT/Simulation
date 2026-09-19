@@ -139,10 +139,12 @@ nada, y al arrancar se imprime en qué modo corre. El SDK trata "sin credenciale
 modo normal, así que un `.env` mal puesto se traga la subida en silencio: se corría, se
 miraba la interfaz, no había nada y no había forma de saber por qué.
 
-**Un episodio abierto se cierra SIEMPRE.** Un Ctrl-C, cerrar el visor o un proceso muerto
-dejan la fila en `running` para siempre, y la pantalla Live elige el primer episodio en
-ese estado **sin ordenar**: un solo huérfano la deja clavada ahí indefinidamente. El
-bucle va en `try/finally` y en el `finally` se cierra con `success=False, failure=None`.
+**Un episodio abierto se cierra SIEMPRE.** Un Ctrl-C, parar desde el panel, cerrar el
+visor o un proceso muerto dejan la fila en `running` para siempre, y la pantalla Live
+elige el primer episodio en ese estado **sin ordenar**: un solo huérfano la deja clavada
+ahí indefinidamente. El bucle va en `try/finally` y en el `finally` se cierra con
+`success=False, failure=None`. `SIGTERM` no recorre ese `finally`: el panel pide `SIGINT`
+y el CLI trata `SIGTERM` como Ctrl-C.
 
 **El disco manda.** El `episodes.jsonl` de `runs/` es la fuente de verdad y Supabase una
 réplica. Un fallo de red avisa una vez, apaga la subida y el episodio sigue. **No
@@ -286,9 +288,15 @@ Dos avisos:
   inocuo) o no viaja. No inventes un kind: la fila la rechaza la base y se apaga la
   subida del resto del run.
 - **Un atasco se reporta como `timeout`.** No hay causa de fallo para "la fuente no
-  entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si entrega
-  pero la percepción no ve nada, es `no_detection`. Son cosas distintas y conviene no
-  mezclarlas, porque el gráfico de fallos las separa.
+  entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si el
+  cartón llega y no se asienta, también. Si entrega pero la percepción no ve nada, es
+  `no_detection`. Son cosas distintas y conviene no mezclarlas, porque el gráfico de
+  fallos las separa. En la cinta, PARA significa reposo medido: `present()` no
+  devuelve tras un settle fijo.
+- **La estación no puede estar en el canto de la banda.** El cartón para donde le dicen,
+  y si eso lo deja con medio cuerpo en el aire vuelca, retrocede o se cae — no falla la
+  ventosa, falla la geometría. Por delante de la estación tiene que quedar al menos la
+  semihuella GIRADA del bulto más largo del catálogo. Las cifras, en `configs/scene.yaml`.
 
 ### El centro de gravedad
 
@@ -443,7 +451,10 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 9. **El panel:** un nivel de mesa, cinta y camión en EJECUCIÓN y DEPURACIÓN; el modo
    debe estar visible y DEPURACIÓN debe avisar que no publica. Cambiar de nivel tiene
    que cambiar la carga (catálogo, número, ruido, CoG), no solo el título de la
-   tarjeta: DEPURACIÓN no puede colapsar las nueve en el experimento legado.
+   tarjeta: DEPURACIÓN no puede colapsar las nueve en el experimento legado. Y ningún
+   control del panel sin bandera en `scripts/palletize.py` se queda encendido: se
+   desactiva y se escribe al lado por qué. Un control inerte cuesta más de depurar que
+   uno que no está.
 10. **Contra la base**, después:
 
 ```sql

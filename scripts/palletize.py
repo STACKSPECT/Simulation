@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sys
 import time
 from pathlib import Path
@@ -38,7 +39,8 @@ def parser() -> argparse.ArgumentParser:
     cli.add_argument("--level", type=int)
     cli.add_argument("--viewer", action="store_true")
     cli.add_argument("--speed", type=float,
-                     help="0 = fast-forward; por defecto 1 con visor y 0 sin visor")
+                     help="segundos simulados por segundo real en el visor; "
+                          "0 = fast-forward. Por defecto 1 con visor y 0 sin visor")
     cli.add_argument("--pause", type=float, default=0.0,
                      help="segundos de pausa entre episodios")
     cli.add_argument("--show-com", action="store_true",
@@ -152,6 +154,16 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
             scene.viewer = None
 
 
+def _request_unwind(_signum: int, _frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def install_termination_unwind() -> None:
+    """SIGTERM (p. ej. ``Popen.terminate``) tiene que deshacer igual que Ctrl-C."""
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _request_unwind)
+
+
 def _aborted(seed: int, scene) -> EpisodeResult:
     return EpisodeResult(
         seed=seed,
@@ -229,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     seed = args.seed
     scene = first_scene
     lines: list[str] = []
+    install_termination_unwind()
     try:
         for index in range(args.episodes):
             seed = args.seed + index

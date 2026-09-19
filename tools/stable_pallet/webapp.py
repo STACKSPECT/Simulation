@@ -1,9 +1,10 @@
 """Browser control panel for the palletizing demonstrator.
 
-Pick a prepared experiment, press play and watch it in the MuJoCo window. While it runs
-the page keeps the switches that are safe to change live -- speed, fast-forward, the
-centre-of-mass markers -- and a transport bar that pauses the cell and steps back
-through what has already happened.
+Pick a level, press play and watch it in the MuJoCo window. Every switch is read once,
+when the run starts, and travels as a flag on the command line: `scripts/palletize.py`
+reports over a one-way pipe, so nothing can be changed once it is running. The transport
+bar and the live switches of the old local runner are disabled in the page for that
+reason -- see the `disabled` marks in `web/index.html`.
 
 Three processes, each with one job. Both modes launch the migrated entrypoint with the
 selected source and level. Execution may upload; debugging always passes
@@ -11,10 +12,10 @@ selected source and level. Execution may upload; debugging always passes
 
     browser  <--HTTP/SSE-->  this server  <--JSON over pipes-->  scripts/palletize.py
 
-Nothing in this module touches MuJoCo. It forwards control messages to the runner and
-republishes whatever the runner reports to every page that is listening, which is why
-the handlers below are all a few lines long: the worst any of them can do is put a dict
-on a queue.
+Nothing in this module touches MuJoCo. Of the control messages the page can send only
+`cancel` means anything -- it stops the child -- and everything the child reports is
+republished to every page that is listening, which is why the handlers below are all a
+few lines long: the worst any of them can do is put a dict on a queue.
 
 The server is stdlib only -- no framework, no bundler, no network at start-up -- so the
 demonstrator keeps working on a laptop with the wifi switched off.
@@ -25,6 +26,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import signal
 import subprocess
 import threading
 import webbrowser
@@ -88,8 +90,10 @@ def _catalogue() -> list[dict[str, Any]]:
 def _palletize_argv(request: dict[str, Any]) -> list[str]:
     """La línea de `scripts/palletize.py` para el nivel elegido.
 
-    DEPURACIÓN añade `--no-telemetry` para que el entrypoint no abra subida. El modo
-    ausente se trata como depuración: subir exige `mode='execution'` explícito.
+    DEPURACIÓN añade `--no-telemetry` para que el entrypoint no abra subida. La puerta
+    HTTP (`_run_request`) siempre manda `mode`, y un `POST /api/run` sin él sube: es la
+    regla «se sube por defecto» de `AGENTS.md` §5. El `debug` de aquí sólo cubre a quien
+    construya la petición a mano.
     """
     python = REPO / ".venv" / "bin" / "python"
     argv = [
@@ -106,17 +110,53 @@ def _palletize_argv(request: dict[str, Any]) -> list[str]:
         argv.append("--viewer")
     if request.get("simplified_graphics"):
         argv.append("--simplified-graphics")
+    if request.get("show_com"):
+        argv.append("--show-com")
     argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
     if request.get("seed") is not None:
         argv.extend(("--seed", str(int(request["seed"]))))
     return argv
 
 
+def unwind_child(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
+    """Pide al hijo que deshaga. ``terminate()`` (SIGTERM) no recorre ``finally``.
+
+    En POSIX, SIGINT se convierte en ``KeyboardInterrupt`` y sí cierra el episodio.
+    SIGTERM y kill quedan como respaldo si el proceso no sale.
+    """
+    if process.poll() is not None:
+        return
+    sigint = getattr(signal, "SIGINT", None)
+    if sigint is not None:
+        try:
+            process.send_signal(sigint)
+        except (ProcessLookupError, OSError, ValueError):
+            return
+        try:
+            process.wait(timeout=timeout)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+    process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
 class PalletizeClient:
     """El entrypoint real, visto con el mismo protocolo de líneas que el runner local."""
 
-    def __init__(self, request: dict[str, Any], on_message: Any) -> None:
-        argv = _palletize_argv(request)
+    def __init__(
+        self,
+        request: dict[str, Any],
+        on_message: Any,
+        *,
+        argv: list[str] | None = None,
+    ) -> None:
+        # `argv` es la costura de los tests: inyecta un hijo falso sin tocar la petición.
+        if argv is None:
+            argv = _palletize_argv(request)
         self.on_message = on_message
         self.process = subprocess.Popen(
             argv, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -150,12 +190,8 @@ class PalletizeClient:
             self.stop()
 
     def stop(self, timeout: float = 5.0) -> None:
-        if self.is_running():
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
+        """SIGINT para que el CLI cierre el episodio; SIGTERM y kill si no sale."""
+        unwind_child(self.process, timeout)
 
 
 class Session:
@@ -250,7 +286,9 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Traduce la tarjeta y el modo que eligió la página a la petición del entrypoint.
 
     Los dos modos llevan `source` y `level`. DEPURACIÓN no elige un experimento legado:
-    `PalletizeClient` añade `--no-telemetry` según `mode`.
+    `PalletizeClient` añade `--no-telemetry` según `mode`. Cualquiera de las dos casillas
+    de centro de masa enciende `--show-com`: el entrypoint sólo tiene esa bandera, y
+    pinta el CoG final del palé en el informe.
     """
     item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
     if item is None:
@@ -267,6 +305,7 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         "speed": float(payload.get("speed", 1.0)),
         "fast_forward": bool(payload.get("fast_forward")),
         "simplified_graphics": bool(payload.get("simplified_graphics")),
+        "show_com": bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com")),
         "seed": payload.get("seed"),
     }
     title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"

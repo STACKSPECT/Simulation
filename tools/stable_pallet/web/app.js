@@ -288,18 +288,25 @@ function refresh() {
     : "Lanza scripts/palletize.py con el nivel elegido y --no-telemetry. Misma escena que EJECUCIÓN, sin subir nada.";
 
   ui.viewer.disabled = busy || !selected?.watchable;
-  ui.measureCom.disabled = busy || !selected?.usesRobot;
   ui.simplified.disabled = busy;
-  ui.hold.disabled = busy;
   ui.seed.disabled = busy;
+  /* Cada bandera se lee una vez, al arrancar: el hijo informa por una tubería de ida y
+     no escucha. Por eso los interruptores de CoM se bloquean mientras corre, en vez de
+     fingir que cambian algo. `measure-com` y `hold` se quedan apagados en el HTML: no
+     hay bandera que mandarles, y el panel lo explica al lado. */
+  ui.showTrue.disabled = busy;
+  ui.showEstimated.disabled = busy;
   if (selected && !selected.watchable) ui.viewer.checked = false;
 
   ui.run.disabled = busy;
   ui.stop.disabled = !busy;
   ui.stop.querySelector("span").textContent = live.holding ? "Cerrar visor" : "Detener";
 
+  /* `--protocol json` no manda `state`, así que `frames` nunca sube de 0 y no hay
+     grabación. La barra entera sale ya apagada del HTML; esto la despertaría sola el
+     día que el entrypoint vuelva a emitir fotogramas. */
   for (const button of ui.transport) button.disabled = !recording;
-  ui.pause.disabled = !busy || live.holding;
+  ui.pause.disabled = !recording;
   ui.pause.classList.toggle("on", live.paused);
   ui.pause.querySelector("span").textContent = live.paused ? "Reanudar" : "Pausa";
   ui.pause.querySelector("use").setAttribute("href", live.paused ? "#i-play" : "#i-pause");

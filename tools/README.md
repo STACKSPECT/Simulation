@@ -33,13 +33,19 @@ uv run stable-pallet plan --scenario scenarios/mixed_boxes.yaml    # sin física
 uv run stable-pallet simulate --viewer --no-measure-com            # ver la celda
 uv run stable-pallet shake --instant-place --no-measure-com        # solo el palé
 uv run stable-pallet benchmark --trials 20                         # contra first-fit
-uv run pytest                                                      # 175 comprobaciones
+uv run pytest                                                      # 200 comprobaciones
 ```
 
 El panel muestra nueve tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
 modo. **EJECUCIÓN** llama a `scripts/palletize.py` con la fuente y el nivel de la
 tarjeta y puede publicar telemetría. **DEPURACIÓN** llama al mismo entrypoint con
 `--source`, `--level` y `--no-telemetry`: misma escena, sin subir nada.
+
+Cada ajuste viaja como bandera al arrancar; el hijo informa por una tubería de ida y no
+escucha. Lo que no tiene bandera sale apagado del panel, con su porqué escrito al lado:
+la barra de reproducción (`--protocol json` no emite `state`, así que no hay grabación),
+«Pesar cada caja en la muñeca» (issue #25) y «Dejar el visor abierto al acabar». Las dos
+casillas de centro de masa comparten `--show-com`.
 
 El aspecto del panel es el de la marca STACKSPECT: `stable_pallet/web/tokens.css` es una
 copia de `Platform/frontend/styles/colors.css` y `app/globals.css` (colores en claro y

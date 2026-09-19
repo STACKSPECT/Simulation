@@ -33,9 +33,10 @@ partir de ahí se apaga la subida del resto de la ejecución.
 
 **Un atasco es `timeout`, no una causa nueva.** No hay valor en el vocabulario para "la
 fuente no entregó". Si la estación se queda vacía y expira la espera, es `timeout`; si
-entrega pero la percepción no ve nada, es `no_detection`. Son cosas distintas y el
-gráfico de fallos las separa, así que no las mezcles. `exhausted` es la tercera y no es
-un fallo: significa que no quedaban paquetes, que es como acaba un episodio bien.
+el cartón llega y no se asienta, también. Si entrega pero la percepción no ve nada, es
+`no_detection`. Son cosas distintas y el gráfico de fallos las separa, así que no las
+mezcles. `exhausted` es la tercera y no es un fallo: significa que no quedaban paquetes,
+que es como acaba un episodio bien.
 
 **`release()` va DESPUÉS de que el brazo se haya retirado**, no antes: arrancar con la
 mano dentro arrastra el siguiente paquete contra la herramienta.
@@ -51,6 +52,21 @@ import numpy as np
 # de esto ha volcado, se ha subido a otro o se ha caído: la banda deja de arrastrarlo y
 # la espera acaba expirando, que es el camino físico a `timeout`.
 BELT_BAND = 0.04
+
+# Reposo medido en la estación, sobre el centro de la tapa: es la pose en la que
+# `_pick` sella, no el `qvel` crudo. Un settle fijo de 0.25 s devolvía `present()`
+# con el cartón aún botando: nivel 22, semilla 1, `std_m-00` salía con vx≈-0.019 m/s
+# y wy≈-0.17 rad/s; el centro de la tapa seguía a ~0.30 m/s (p95) y en el segundo
+# siguiente se movía 47 mm en X y 36 mm en Z. Esperar 1 s más dejaba esa pose quieta
+# y bajaba el error XY de 28 mm a 2.4 mm.
+#
+# El `qvel` no sirve como umbral único: un `book_s` asentado en la banda mantiene
+# |ω| de contacto de hasta 0.12 rad/s con 0.1 mm de deriva neta en 2 s, y expirar
+# entonces es un `timeout` falso. Estos umbrales están entre ese chatter (p95 del
+# centro de la tapa ≈ 9 mm/s) y el bote del bug (p95 ≈ 300 mm/s). No se toca
+# `episode.tolerance_xy` para enmascarar el movimiento.
+REST_LIN_VEL = 0.015              # m/s del centro de la tapa
+REST_HOLD_S = 0.10                # 5 ticks a 50 Hz; un cruce por cero no es quietud
 
 
 class Supply(Protocol):
@@ -119,9 +135,11 @@ class Belt(_BaseSupply):
     pelearse con la fricción en vez de usarla. Medido: 8,4 N de empuje contra 37 N de
     fricción estática, el cartón no se movía y todos los episodios salían `timeout`.
 
-    Lo demás —giro, asiento, contactos— lo sigue resolviendo la física. Y el atasco
-    sigue siendo alcanzable de verdad: un cartón que vuelca o se sale de la banda deja
-    de ir montado en ella, la banda deja de arrastrarlo, y la espera expira.
+    Lo demás —giro, asiento, contactos— lo sigue resolviendo la física. Llegar a la
+    estación no basta: `present()` no devuelve hasta que el centro de la tapa está
+    quieto, o hasta que expira `timeout_s`. Y el atasco sigue siendo alcanzable de
+    verdad: un cartón que vuelca, se sale de la banda o no se asienta deja de contar
+    como entregado, y la espera expira.
 
     El paquete se inyecta en la ENTRADA de la banda, no en la estación, y hace el
     trayecto entero: llega con la pose que traiga, torcida incluida. Inyectar en la
@@ -167,7 +185,16 @@ class Belt(_BaseSupply):
         return abs(z - (self.surface_z + box.dims_m[2] / 2)) < BELT_BAND
 
     def _drive(self, scene) -> None:
-        """Un tick de banda: arrastra hacia la estación lo que vaya montado en ella."""
+        """Un PASO de banda: arrastra hacia la estación lo que vaya montado en ella.
+
+        Va por paso de física, no por tick de control, y eso no es afinado: la superficie
+        de la banda es estática y lo único que mueve el cartón es que se le reponga la
+        velocidad. Entre reposición y reposición la fricción se la come, así que
+        reponiéndola cada 20 ms —un tick de control, diez pasos— la consigna de 0.25 m/s
+        se quedaba en 0.10 m/s reales: 11.9 s para los 1.23 m del trayecto, con el brazo
+        parado mirando todo ese rato. Reponiéndola cada 2 ms salen 0.231 m/s y 5.3 s.
+        Medido en el nivel 21.
+        """
         for index in self.pending:
             if not self._riding(scene, index):
                 continue
@@ -192,6 +219,34 @@ class Belt(_BaseSupply):
                 scene.data.qvel[dof : dof + 3] = 0.0
         self.running = False
 
+    def _resting(self, scene, index: int, previous_top: np.ndarray, dt: float) -> tuple[bool, np.ndarray]:
+        """Si el centro de la tapa ya no se mueve. Devuelve también la pose nueva."""
+        top = scene.box_top_center(index).copy()
+        speed = float(np.linalg.norm(top - previous_top) / dt) if dt > 0 else 0.0
+        return speed < REST_LIN_VEL, top
+
+    def _wait_until_still(self, scene, index: int, deadline: float) -> bool:
+        """Espera a reposo sostenido del centro de la tapa. `False` → `timeout`."""
+        tick = 1.0 / scene.cfg["episode"]["control_hz"]
+        still = 0.0
+        previous = scene.box_top_center(index).copy()
+        while scene.clock < deadline:
+            scene.step(tick)
+            resting, previous = self._resting(scene, index, previous, tick)
+            if resting:
+                still += tick
+                if still >= REST_HOLD_S:
+                    return True
+            else:
+                still = 0.0
+        return False
+
+    def _fail_delivery(self, scene) -> None:
+        """No hubo entrega: atasco, y el director lo traduce a `timeout`."""
+        self._stop(scene)
+        self.jammed = True
+        self.current = None
+
     def present(self, scene) -> str | None:
         if not self.pending:
             self.exhausted = True
@@ -203,18 +258,19 @@ class Belt(_BaseSupply):
         self.running = True
         deadline = scene.clock + self.timeout_s
         body = scene.body_id(index)
+        step = scene.model.opt.timestep
         while scene.clock < deadline:
             self._drive(scene)
-            scene.step(1.0 / scene.cfg["episode"]["control_hz"])
+            scene.step(step)
             if abs(float(scene.data.xpos[body][0]) - self.station_x) < self.tol:
                 self._stop(scene)
-                scene.settle(0.25)            # que deje de rodar antes de mirarlo
+                if not self._wait_until_still(scene, index, deadline):
+                    self._fail_delivery(scene)
+                    return None
                 return scene.boxes[index].package_id
 
         # La banda empujó lo que pudo y el cartón no llegó: atasco.
-        self._stop(scene)
-        self.jammed = True
-        self.current = None
+        self._fail_delivery(scene)
         return None
 
 

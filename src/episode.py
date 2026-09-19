@@ -62,7 +62,11 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
                 verbose: bool = False) -> Episode:
     """Completa un episodio autónomo desde la fuente hasta el palé."""
     arm = ArmController(scene)
+    # `speed` decide dos cosas y las dos viven aquí: si el brazo teletransporta entre
+    # waypoints (0 = fast-forward) y, con visor, a qué ritmo se ve. Sin la segunda,
+    # cualquier `--speed` positivo corría igual. Ver `PalletScene.sync_viewer`.
     arm.fast_forward = speed <= 0.0
+    scene.speed = max(0.0, float(speed))
     episode = Episode(seed=seed, n_objects=len(scene.boxes))
     scene.episode_specs = {}
     scene.episode_plans = {}
@@ -210,6 +214,19 @@ def _pick(arm: ArmController, scene, box, observation) -> str | None:
     top[2] += observation.dims_guess[2] / 2
     seal_z = float(top[2]) + arm.cup_gap
     safe_z = max(float(motion["transit_height"]), seal_z + float(motion["place_clearance"]))
+    # Subir EN VERTICAL antes de viajar, igual que hace `_place`. Sin esto el brazo va
+    # directo desde donde estuviera, y como los waypoints se interpolan en juntas el TCP
+    # traza un arco que barre la fuente: medido en el nivel 12, la caja aparecía 23.8 mm
+    # desplazada y 5.8 mm hundida ANTES de sellar, y el episodio moría en
+    # `wrong_placement` por 2 mm de tolerancia. La caja no se escurría de la ventosa: el
+    # brazo la embestía al llegar.
+    #
+    # Y es un waypoint DE CONVENIENCIA: si no sale, se sigue. Subir en vertical desde
+    # donde esté el brazo puede quedar fuera de alcance —lejos del pedestal, la cota de
+    # tránsito se va de la envolvente— y abortar la recogida por no poder hacer el rodeo
+    # bonito es peor que hacer el rodeo feo.
+    current = arm.tcp_pose().position
+    arm.go_to(current[0], current[1], safe_z, observation.yaw)
     if not arm.go_to(top[0], top[1], safe_z, observation.yaw):
         return "ik_unreachable"
     if not arm.go_to(top[0], top[1], seal_z, observation.yaw, approach=True):

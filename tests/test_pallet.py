@@ -14,7 +14,12 @@ import numpy as np  # noqa: E402
 from theker_telemetry import FAILURES  # noqa: E402
 
 from placing import METRIC_NAMES  # noqa: E402
-from scripts.palletize import oracle_for  # noqa: E402
+from scripts.palletize import (  # noqa: E402
+    _aborted,
+    _request_unwind,
+    install_termination_unwind,
+    oracle_for,
+)
 from src import measure  # noqa: E402
 from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
 from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
@@ -287,6 +292,56 @@ def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
     assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
 
 
+def test_the_table_stages_one_box_at_a_time() -> None:
+    """La mesa prepara UN bulto, y el siguiente entra cuando se llevan el anterior.
+
+    No es una simplificación: es lo único que cabe. La mesa mide 0.72 x 0.68 m útiles y
+    dos `std_m` sólo entran con 80 mm de holgura como mucho; con esa holgura, al extraer
+    uno el que va en la mano barre al vecino y lo tira al suelo (385 mm medidos), y la
+    holgura que haría falta para no tocarlo ya no cabe en la mesa. Con la mesa llena, eso
+    salía como que al brazo se le escurría la caja.
+
+    Sólo se ve con movimiento real: en fast-forward el brazo teletransporta entre
+    waypoints y no barre nada.
+    """
+    from src.cell.table import TableSupply
+
+    boxes = [
+        SimpleNamespace(index=i, dims_m=dims, package_id=f"b{i}")
+        for i, dims in enumerate([(0.42, 0.30, 0.18), (0.24, 0.18, 0.10),
+                                  (0.55, 0.36, 0.26)])
+    ]
+    puestas: dict[int, tuple[float, float, float]] = {}
+    scene = SimpleNamespace(
+        cfg=CFG, boxes=boxes,
+        level=SimpleNamespace(yaw_jitter_deg=0.0, pos_jitter_m=0.0),
+        rng=np.random.default_rng(0),
+        place_box=lambda index, pos, yaw: puestas.__setitem__(index, pos),
+        settle_until_rest=lambda: None,
+    )
+    supply = TableSupply(scene)
+    supply.stage(scene)
+    assert list(puestas) == [0], f"la mesa debe preparar uno solo: {list(puestas)}"
+
+    cfg = CFG["table"]
+    cx, cy = (float(v) for v in cfg["center"])
+    half_x, half_y, _ = (float(v) for v in cfg["size"])
+    for index, (x, y, _z) in puestas.items():
+        length, width, _ = boxes[index].dims_m
+        # Entero dentro de la mesa: uno a medias sobre el canto se cae, y lo que se mide
+        # despues es una caja en el suelo.
+        assert cx - half_x <= x - length / 2 and x + length / 2 <= cx + half_x, index
+        assert cy - half_y <= y - width / 2 and y + width / 2 <= cy + half_y, index
+
+    # El segundo entra al presentarlo, no antes, y en el sitio que dejó el primero.
+    assert supply.present(scene) == "b0"
+    assert list(puestas) == [0], "presentar el que ya está puesto no mueve nada"
+    supply.release(scene)                      # el brazo se lo llevó
+    assert supply.present(scene) == "b1"
+    assert list(puestas) == [0, 1]
+    assert puestas[1][:2] == puestas[0][:2]
+
+
 def test_depth_fuses_into_the_height_map() -> None:
     """La fusión, sin MuJoCo: un fotograma sintético cae en la celda que le toca.
 
@@ -325,6 +380,75 @@ def test_depth_fuses_into_the_height_map() -> None:
 def test_oracle_is_any_stub_for_every_combination() -> None:
     for flags in itertools.product((False, True), repeat=4):
         assert oracle_for(*flags) is any(flags)
+
+
+def test_an_aborted_episode_is_unsuccessful_without_inventing_a_failure() -> None:
+    scene = SimpleNamespace(
+        level=SimpleNamespace(id=11), boxes=[object()], clock=1.25, oracle=False,
+    )
+    result = _aborted(7, scene)
+    assert result.success is False
+    assert result.failure is None
+    assert result.metrics["aborted"] is True
+    assert result.task == "palletizing"
+
+
+def test_sigterm_unwinds_like_ctrl_c() -> None:
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        install_termination_unwind()
+        assert signal.getsignal(signal.SIGTERM) is _request_unwind
+        try:
+            _request_unwind(signal.SIGTERM, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("SIGTERM tiene que deshacer como Ctrl-C")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_sigterm_runs_the_finally_that_closes_an_episode() -> None:
+    """El default de SIGTERM mata sin finally; el CLI no puede permitírselo."""
+    import signal
+    import subprocess
+    import tempfile
+    import textwrap
+
+    marker = Path(tempfile.mkdtemp()) / "cleaned"
+    child = textwrap.dedent(f"""\
+        import sys, time
+        from pathlib import Path
+        sys.path.insert(0, {str(REPO)!r})
+        from scripts.palletize import install_termination_unwind
+        install_termination_unwind()
+        try:
+            print("ready", flush=True)
+            time.sleep(30)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            Path(sys.argv[1]).write_text("ok")
+    """)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child, str(marker)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline().strip()
+        if line != "ready":
+            err = proc.stderr.read() if proc.stderr else ""
+            raise AssertionError(f"el hijo no arrancó: {line!r}\n{err}")
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=8) != -signal.SIGTERM
+        assert marker.read_text() == "ok"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
 
 
 def test_planners_keep_their_contract() -> None:

@@ -78,7 +78,18 @@ vacuum:
   cup_gap: 0.0015
 
 table:
-  center: [-0.20, -0.66]
+  # APARTADA DEL PALÉ, y ése es el motivo del número. En [-0.20, -0.66] la mesa ocupaba
+  # x[-0.56, 0.16] y[-1.00, -0.32] y el palé empieza en x=0.00, y=-0.40: se pisaban en un
+  # rectángulo de 0.16 x 0.08 m sobre la esquina de la cubierta. Eso no se ve como un
+  # choque, se ve como que el brazo se empotra: el planificador puntúa esa esquina como
+  # el mejor hueco —baja, pegada al canto, apoyo 100 %— y la caja va contra la mesa. Se
+  # quedaba a 135 mm del destino y el episodio moría en `ik_unreachable`.
+  #
+  # En [-0.20, -0.80] la mesa acaba en y=-0.46 y deja 60 mm de aire hasta el palé. La
+  # estación queda a 0.80 m del pedestal, dentro de la envolvente medida (ver el barrido
+  # de alcance en `configs/pallet.yaml`). Sólo afecta a los niveles de mesa: cinta y
+  # camión tienen su propia fuente y no coexisten con ella en la escena.
+  center: [-0.20, -0.80]
   size: [0.36, 0.34, 0.29]        # SEMIEJES (lo que quiere MuJoCo)
   height: 0.58                    # z de la superficie
   friction: [0.9, 0.01, 0.001]
@@ -91,12 +102,39 @@ table:
 # La banda se mueve de verdad: un `slide` con actuador de velocidad arrastra el paquete
 # y parar es poner la consigna a cero. NO se teletransporta nada — el punto de tener
 # cinta es que el paquete llegue con la pose que traiga, incluida la torcida.
+#
+# ── LA ESTACIÓN NO PUEDE ESTAR EN EL CANTO, Y ES DONDE ESTABA ───────────────────
+# Con `center: [-0.85, -0.66]` y `dims: [1.40, 0.50]` la banda acababa en x = -0.15 y la
+# estación estaba en x = -0.20: el cartón paraba con el centro a 50 mm del canto y el
+# resto EN EL AIRE. Medido sobre los tres niveles, el vuelo iba de 40 a 205 mm según el
+# bulto y su giro, y eso no se ve como un error de geometría sino como que la caja se
+# cae: en el nivel 22 el primer `std_m` llegaba VOLCADO 24.5°, y mientras el brazo
+# viajaba se hundía 36 mm y RETROCEDÍA 47 mm; en el 23 había cartones que se iban al
+# suelo (-500 y -613 mm en Z). De ahí el `ik_unreachable` del primer bulto.
+#
+# Cuánta banda hace falta por delante: el bulto más largo del generador mide 0.55 m y el
+# nivel 23 lo gira hasta 30°, así que su semihuella en X llega a
+# 0.55·cos30 + 0.36·sen30 = 0.328 m. Con la banda acabando en x = +0.15 quedan 0.35 m
+# por delante de la estación y los cartones de los tres niveles quedan ENTEROS sobre
+# ella: de 114 a 259 mm de banda por delante, vuelco 0.0° y deriva 0.0 mm.
+#
+# Y por qué además baja a y = -0.80: alargarla la mete debajo de la esquina cercana del
+# palé. Es el mismo choque que acaba de apartar la mesa —ver `table`— y se arregla
+# igual. En y = -0.66 la banda ocupaba y[-0.91, -0.41] y el palé empieza en y = -0.40:
+# con la herramienta (184 mm de hondo) bajando sobre esa esquina, el barrido de IK del
+# borde cercano pasaba de 32/180 poses irresolubles a 37/180 sólo por alargarla. En
+# y = -0.80 ocupa y[-1.05, -0.55], deja 150 mm de aire hasta la cubierta y el barrido
+# vuelve a 32/180. La estación queda donde la de la mesa, que es la pose de agarre ya
+# barrida con IK, a 0.80 m del pedestal.
+#
+# La ENTRADA no se mueve: `Belt.entry_x = center_x - length/2 + 0.12 = -1.43`, igual que
+# antes, así que el recorrido del paquete y lo medido sobre él siguen valiendo.
 conveyor:
-  center: [-0.85, -0.66]          # [x, y] de la banda, en el mundo
-  dims: [1.40, 0.50]              # [largo, ancho] COMPLETAS
+  center: [-0.70, -0.80]          # [x, y] de la banda, en el mundo
+  dims: [1.70, 0.50]              # [largo, ancho] COMPLETAS
   height: 0.58                    # misma cota que la mesa: la estación no cambia de sitio
   speed: 0.25                     # m/s con la cinta en marcha
-  station: [-0.20, -0.66]         # [x, y] de la estación de recogida
+  station: [-0.20, -0.80]         # [x, y] de la estación de recogida. Misma que la mesa
   station_tol: 0.020              # se da por llegado dentro de esta banda, y para
   spacing: 0.50                   # separación entre paquetes consecutivos
   timeout_s: 25.0                 # sin entrega en este tiempo -> `timeout`
@@ -130,9 +168,22 @@ truck:
 
 motion:
   # Dos velocidades, porque son dos cosas distintas y medirlas juntas sale mal.
-  cartesian_speed: 1.20           # m/s en tránsito, con la caja en el aire
-  approach_speed: 0.30            # m/s en el descenso final sobre cartón o sobre el montón
-  angular_speed: 2.40             # rad/s de giro de muñeca
+  #
+  # LA MITAD DE LO QUE HABÍA, Y ESTÁ MEDIDO. Con 1.20 / 0.30 / 2.40 el episodio sólo
+  # aguantaba en fast-forward, donde el brazo TELETRANSPORTA entre waypoints y estas
+  # cifras ni se usan. En cuanto se interpola de verdad —`--speed 1`, que es lo que corre
+  # el visor y el panel— el nivel 11 se caía 1/4 con `ik_unreachable`: el servo no llegaba
+  # a la pose dentro de `reach_tolerance` y la maniobra se daba por imposible.
+  #
+  #   semilla 1, --speed 1     N1          N2        N3
+  #   1.20 / 0.30 / 2.40       1/4 FALLO   -         -
+  #   0.60 / 0.15 / 1.20       4/4 OK      6/6 OK    8/8 OK
+  #
+  # Lo que cuesta: el episodio de N1 pasa de 17.1 s a 72.9 s de tiempo SIMULADO; N2 sale
+  # en 115.1 s y N3 en 152.9 s. En fast-forward no cuesta nada, porque no se usan.
+  cartesian_speed: 0.60           # m/s en tránsito, con la caja en el aire
+  approach_speed: 0.15            # m/s en el descenso final sobre cartón o sobre el montón
+  angular_speed: 1.20             # rad/s de giro de muñeca
   min_move_s: 0.25                # ningún waypoint más corto que esto
   max_move_s: 2.50
   transit_height: 0.94            # todo el trayecto va en cartesiano a esta cota mínima
