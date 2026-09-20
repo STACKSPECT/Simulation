@@ -113,6 +113,101 @@ packages:
     friction: [0.95, 0.01, 0.001]
     rgba: [0.76, 0.57, 0.34, 1]
 
+  # ── LOS CINCO DEL NIVEL 15 ──────────────────────────────────────────────────
+  #
+  # No ensanchan el catálogo tanto como se pretendía, y el porqué es la parte útil de
+  # este bloque: LA CELDA YA ESTABA AL BORDE DE SU ENVOLVENTE. Los ocho de arriba no son
+  # un surtido cualquiera, son casi exactamente lo que este brazo y esta herramienta
+  # saben manipular. Estos cinco cambian la FORMA —más plano, más cúbico, más ancho— y
+  # estiran el extremo grande lo poco que se puede.
+  #
+  # TRES LÍMITES, los tres MEDIDOS aquí, y los tres descubiertos rompiendo el nivel.
+  #
+  #   1. SUELO DE HUELLA 0.24 x 0.18, Y NO ES EL AGARRE, ES EL DEJAR.
+  #      El cuerpo del VGP20 mide 264 x 184 mm y la holgura del planificador son 40 mm
+  #      ALREDEDOR DE LA CAJA, no alrededor de la herramienta. En cuanto la caja es más
+  #      corta que 264 - 2·40 = 184 mm, el anillo deja de tapar al cuerpo: la caja entra
+  #      en su hueco pero la herramienta pisa al vecino al bajar. Barrido con la semilla
+  #      1, la misma caja junto a un vecino de 0.30 x 0.22:
+  #
+  #          huella      error medido al soltar
+  #          0.14 x 0.11      89,4 mm    wrong_placement
+  #          0.19 x 0.13      22,9 mm    wrong_placement (la tolerancia son 20 mm)
+  #          0.24 x 0.18       2,1 mm    ok
+  #
+  #      `book_s` (0.24 x 0.18) YA ES la caja más pequeña que esta celda puede dejar.
+  #      Para meter una menor hay que re-medir `clearance`, no bajar el número aquí.
+  #
+  #   2. NINGUNA CAJA MÁS ALTA QUE SU LADO CORTO. Se probó el pequeño a 0.12 de alto con
+  #      0.11 de fondo: es una torre, vuelca al cortar el vacío y se mide 89 mm fuera de
+  #      sitio. Tumbado apoya como una tableta.
+  #
+  #   3. NADA POR DEBAJO DE 0.10 DE ALTO, Y ÉSTE ES EL QUE MÁS CUESTA VER. Una caja de
+  #      0.06 deja el TCP a 0.205 m al depositar sobre la cubierta. El canto del palé más
+  #      cercano al pedestal cae a 0.42 m de él, y ahí abajo el brazo NO SOSTIENE la pose
+  #      —es la banda que la cabecera del alcance describe: primer fallo a 0.373 m, todas
+  #      buenas desde 0.447 m—. El waypoint medido que revienta es (0.62, -0.30, 0.247).
+  #      Con `reach_max: 0` el filtro de alcance está APAGADO, así que el planificador
+  #      elige ese hueco igual y el episodio muere en `ik_unreachable`.
+  #
+  #      Consecuencia para quien componga una mezcla: lo que importa no es cuántos bultos
+  #      hay, sino QUÉ FRACCIÓN mide 0.10 de alto, porque cada uno de ésos es un dado.
+  #      Medido sobre 8 semillas con 12 bultos:
+  #
+  #          bultos de 0.10   episodios en verde
+  #               9 de 12          2/8     (todo el peso en el curso bajo)
+  #               3 de 12          5/8     (alturas repartidas: 0.10 a 0.22)
+  #
+  #      Por eso estos cinco NO comparten altura: van a 0.10, 0.12, 0.20, 0.20 y 0.22,
+  #      repartidos como los ocho de arriba. Cuadrar los cursos ayudaría al apoyo, pero
+  #      amontona placements en la banda muerta y sale mucho más caro.
+  #
+  #   4. LA MESA. `configs/scene.yaml: table.size` son semiejes 0.36 x 0.34. Con los 15°
+  #      de giro y los 10 mm de descentramiento del nivel 15, `bulky_xl` ocupa media
+  #      envergadura 0.50·cos15 + 0.36·sin15 = 0.288, más 0.010 = 0.298 <= 0.36. Por eso
+  #      el nivel 15 no pasa de 15°: a 30° una caja así se sale de la mesa.
+  #
+  # Y la masa NO sube: los 8,5 kg de `heavy_l` ya son la carga útil del UR10e menos el
+  # VGP20. «Más grande» aquí es MÁS HUELLA CON MENOS DENSIDAD —149-268 kg/m³, mercancía
+  # ligera—, que es como se agranda una caja sin mentir sobre el robot. `bulky_xl` tiene
+  # la mayor huella que un nivel de MESA ha colocado nunca (0.50 x 0.36; el mayor de los
+  # niveles de mesa era `apparel`, 0.45 x 0.32). `heavy_l`, que es más grande todavía,
+  # sólo aparece en el nivel 31, de camión.
+  #
+  # Lo que NO se pudo hacer, y conviene que quede escrito para no volver a intentarlo sin
+  # tocar antes la celda: una caja más pequeña que `book_s`. Se probaron 0.14 x 0.11 y
+  # 0.19 x 0.13, y las dos fallan por el límite 1.
+  tray_s:
+    dims: [0.28, 0.20, 0.10]       # 5,6 L: el de menos volumen tras `book_s`
+    mass: 1.50                     # 268 kg/m³
+    cog_offset: [-0.022, 0.016, 0.000]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.72, 0.51, 0.29, 1]
+  flat_m:
+    dims: [0.40, 0.30, 0.12]       # ancha y baja
+    mass: 3.80                     # 264 kg/m³
+    cog_offset: [-0.034, 0.026, -0.012]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.58, 0.38, 0.20, 1]
+  cube_m:
+    dims: [0.30, 0.26, 0.20]       # casi cuadrado en planta: gira sin ganar nada
+    mass: 3.60                     # 231 kg/m³
+    cog_offset: [0.026, 0.022, -0.020]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.76, 0.57, 0.34, 1]
+  bulky_l:
+    dims: [0.44, 0.34, 0.20]       # voluminoso y ligero
+    mass: 4.50                     # 150 kg/m³
+    cog_offset: [-0.045, -0.030, -0.020]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.64, 0.43, 0.23, 1]
+  bulky_xl:
+    dims: [0.50, 0.36, 0.22]       # la mayor huella que un nivel de mesa ha colocado
+    mass: 5.90                     # 149 kg/m³; 16 ventosas = 560 N contra 87 N
+    cog_offset: [0.060, 0.035, -0.026]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.72, 0.51, 0.29, 1]
+
 # El sobre del que se sortea cuando un nivel pide `random`. La masa NO se sortea: es
 # densidad × volumen, que es lo que hace que un bulto grande y ligero y otro pequeño y
 # denso sean problemas distintos.
@@ -128,9 +223,10 @@ generator:
   cog_sigma: 0.10
   cog_z_bias: -0.04              # el contenido se asienta un poco por debajo del centro
 
-# ── LOS NUEVE NIVELES ─────────────────────────────────────────────────────────
+# ── LOS ONCE NIVELES ──────────────────────────────────────────────────────────
 #
-# Tres tareas, tres niveles cada una. El `id` es lo que se sube a `episodes.level`, y la
+# Tres tareas: cinco niveles de mesa, tres de cinta y tres de camión. El `id` es lo que
+# se sube a `episodes.level`, y la
 # DECENA es la tarea: 1x mesa, 2x cinta, 3x camión. Se codifica así porque la plataforma
 # tiene un solo entero por episodio y `task` es un vocabulario cerrado (todo esto es
 # `palletizing`): sin la decena, la interfaz compararía un nivel 2 de mesa contra un
@@ -150,6 +246,62 @@ levels:
      yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue}
   - {id: 13, source: table,    name: "mesa · N3 · sorteado, CoG adversario",
      n_packages: 8, types: [random], yaw_jitter_deg: 30, pos_jitter_m: 0.020, cog: adversarial}
+
+  # ── LOS DOS NIVELES DE VOLUMEN ──────────────────────────────────────────────
+  #
+  # Mueven el cuarto eje —«pocos bultos y una capa -> el palé lleno»— y los dos números
+  # de abajo están MEDIDOS, no elegidos. Empezaron en 15 y 30 y bajaron hasta aquí
+  # barriendo semillas, porque esta celda tiene dos techos y ninguno es el del palé:
+  #
+  #   1. El PLANIFICADOR se queda sin plano. `min_support_ratio` 0.60 pide el 60 % de la
+  #      huella apoyada a una misma altura. Cuando el montón junta muchas bandas de
+  #      altura, una caja grande deja de tener dónde posarse mucho antes de que el palé
+  #      se llene: medido con 30 bultos, `bulky_l` se quedó sin UNA sola ventana válida
+  #      de 10.748 —5.607 por `min_support_ratio`, 4.855 por `com_unsupported`, 286 por
+  #      colisión— con el palé al 44 % de relleno.
+  #
+  #   2. El BRAZO no sostiene el canto cercano del palé abajo del todo. Ver el límite 3
+  #      de la cabecera del catálogo: con `reach_max: 0` el filtro está apagado y el
+  #      planificador elige esos huecos igual. Cada bulto bajo es un dado, así que el
+  #      riesgo crece con el NÚMERO de colocaciones.
+  #
+  # Los dos techos son PREEXISTENTES y se ven aquí sólo porque estos niveles colocan más
+  # bultos que ningún otro. La prueba: el nivel 13, que ya estaba, va 3/5 en el mismo
+  # barrido. Los niveles de este repo están verdes en la semilla por defecto, no en todas.
+  #
+  # Barrido de semillas, episodios completos sobre el total (mismo comando de §9 del
+  # AGENTS, `-n 1 --no-telemetry --seed N`):
+  #
+  #   nivel 14      nivel 15                    referencia
+  #    8 -> 6/7     12 -> 5/8   <- elegido      nivel 11 (4 bultos)  -> 5/5
+  #   10 -> 7/8     14 -> 3/8                   nivel 12 (6 bultos)  -> 5/5
+  #   12 -> 3/5     20 -> 0/5                   nivel 13 (8 bultos)  -> 3/5
+  #   15 -> 2/5     30 -> 0/5
+  #
+  # Las semillas que fallan lo hacen por motivos DISTINTOS y conviene no confundirlos: la
+  # 5 del nivel 14 se derrumba en el sexto bulto con 8, 10, 12 y 15 declarados —es un
+  # sorteo malo, no un problema de volumen— y las del 15 son la banda muerta del brazo.
+  #
+  # Subir estos números NO se arregla tocando la mezcla: hace falta medir el alcance del
+  # brazo CON CARGA y encender `reach_max`/`reach_min`, que es trabajo aparte y toca los
+  # nueve niveles que ya existen.
+  - {id: 14, source: table,    name: "mesa · N4 · la mezcla conocida, el palé más lleno",
+     n_packages: 10, types: [book_s, small, shoe_m, std_s, std_m, apparel],
+     yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue}
+  # El 14 copia mezcla, giro y CoG del 12 y sólo cambia el número de bultos: si sale
+  # rojo, fue el volumen y nada más. Es el único eje que mueve.
+  #
+  # El 15 declara los doce nombres uno a uno, y eso es a propósito por DOS motivos.
+  # `build_catalogue` baraja la lista declarada y la recorre en vez de sortear con
+  # reemplazo, así que con exactamente tantas entradas como bultos cada tipo sale las
+  # veces que aparece —ni una más— y la semilla sigue decidiendo el ORDEN, que es lo que
+  # el sistema no sabe de antemano. Y si la lista fuera más larga que `n_packages`, el
+  # recorte se llevaría por delante tipos enteros: con una lista de 30 y 12 bultos,
+  # `bulky_xl` no sale en 3 de cada 5 episodios y el nivel deja de probar lo que dice.
+  - {id: 15, source: table,    name: "mesa · N5 · catálogo ampliado, cinco formas nuevas",
+     n_packages: 12, yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue,
+     types: [tray_s, tray_s, book_s, flat_m, flat_m, flat_m,
+             cube_m, cube_m, cube_m, bulky_l, bulky_l, bulky_xl]}
 
   - {id: 21, source: conveyor, name: "cinta · N1 · un tipo, centrado en la banda",
      n_packages: 4, types: [std_m],  yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: centred}

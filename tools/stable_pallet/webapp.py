@@ -62,7 +62,7 @@ def _idle_state() -> dict[str, Any]:
 
 
 def _catalogue() -> list[dict[str, Any]]:
-    """Los nueve niveles declarados en YAML, agrupables por fuente."""
+    """Los niveles declarados en YAML, agrupables por fuente."""
     config = yaml.safe_load((REPO / "configs" / "pallet.yaml").read_text(encoding="utf-8"))
     descriptions = {
         "table": "Bultos preparados en mesa.",
