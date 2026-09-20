@@ -26,6 +26,7 @@ const ui = {
   viewer: $("viewer"),
   measureCom: $("measure-com"),
   simplified: $("simplified"),
+  stabilityTest: $("stability-test"),
   hold: $("hold"),
   seed: $("seed"),
   run: $("run"),
@@ -176,6 +177,7 @@ async function start() {
       viewer: ui.viewer.checked,
       hold_at_end: ui.hold.checked,
       simplified_graphics: ui.simplified.checked,
+      stability_test: ui.stabilityTest.checked,
       measure_com: ui.measureCom.checked,
       seed: seed === "" ? null : Number(seed),
     });
@@ -289,6 +291,7 @@ function refresh() {
 
   ui.viewer.disabled = busy || !selected?.watchable;
   ui.simplified.disabled = busy;
+  ui.stabilityTest.disabled = busy;
   ui.seed.disabled = busy;
   /* Cada bandera se lee una vez, al arrancar: el hijo informa por una tubería de ida y
      no escucha. Por eso los interruptores de CoM se bloquean mientras corre, en vez de

@@ -619,7 +619,25 @@ def _pallet_xml(cfg: dict, simplified: bool) -> str:
       <joint name="pallet_x" type="slide" axis="1 0 0" damping="2"/>
       <joint name="pallet_y" type="slide" axis="0 1 0" damping="2"/>
       <joint name="pallet_z" type="slide" axis="0 0 1" damping="2"/>
+      <joint name="pallet_rx" type="hinge" axis="1 0 0" damping="1"
+             limited="true" range="-0.0001 0.0001"/>
+      <joint name="pallet_ry" type="hinge" axis="0 1 0" damping="1"
+             limited="true" range="-0.0001 0.0001"/>
       {geoms}
+    </body>"""
+
+
+def _stability_beam_xml(cfg: dict) -> str:
+    """Cresta del ensayo final, aparcada bajo el suelo mientras se paletiza."""
+    width, depth = (float(value) for value in cfg["pallet"]["dims"])
+    test = cfg["stability_test"]
+    length = max(width, depth) / 2 + 0.08
+    return f"""
+    <body name="stability_beam" mocap="true" pos="0 0 -1">
+      <geom name="stability_beam" type="box"
+            size="{length} {float(test['beam_width']) / 2} {float(test['beam_height']) / 2}"
+            rgba="0.78 0.28 0.14 0" friction="1.2 0.02 0.001"
+            density="0" contype="1" conaffinity="1"/>
     </body>"""
 
 
@@ -920,6 +938,7 @@ def build_mjcf(
 {source_fixture}
 {auxiliary_table}
 {_industrial_xml(simplified)}
+{_stability_beam_xml(cfg)}
 {_pallet_xml(cfg, simplified)}
 {_ur10e_xml(cfg, _cups_xml(cfg, simplified), carried, simplified)}
 {packages}
@@ -1013,6 +1032,21 @@ class PalletScene:
         self.pallet_weld = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_EQUALITY, "pallet_anchor"
         )
+        pallet_joints = [
+            mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+            for name in ("pallet_x", "pallet_y", "pallet_z", "pallet_rx", "pallet_ry")
+        ]
+        self.pallet_qpos = [self.model.jnt_qposadr[index] for index in pallet_joints]
+        self.pallet_dofs = [self.model.jnt_dofadr[index] for index in pallet_joints]
+        self.stability_beam_body = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "stability_beam"
+        )
+        self.stability_beam_geom = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "stability_beam"
+        )
+        self.stability_beam_mocap = int(
+            self.model.body_mocapid[self.stability_beam_body]
+        )
 
     def rebuild(self, held: HeldPackage | None) -> None:
         """Vuelve a compilar con el paquete colgando de la herramienta, o sin él.
@@ -1022,6 +1056,8 @@ class PalletScene:
         """
         mujoco = self.mujoco
         arm = np.asarray(self.data.qpos[self.arm_qpos]).copy()
+        pallet_qpos = np.asarray(self.data.qpos[self.pallet_qpos]).copy()
+        pallet_qvel = np.asarray(self.data.qvel[self.pallet_dofs]).copy()
         poses = {box.index: self.box_pose(box.index) for box in self.boxes}
         pallet_locked = (
             bool(self.data.eq_active[self.pallet_weld]) if self.pallet_weld >= 0 else True
@@ -1033,6 +1069,8 @@ class PalletScene:
 
         self.data.qpos[self.arm_qpos] = arm
         self.data.ctrl[:] = arm
+        self.data.qpos[self.pallet_qpos] = pallet_qpos
+        self.data.qvel[self.pallet_dofs] = pallet_qvel
         if self.pallet_weld >= 0:
             self.data.eq_active[self.pallet_weld] = pallet_locked
         for box in self.boxes:

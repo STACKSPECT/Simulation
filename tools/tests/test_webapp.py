@@ -244,6 +244,35 @@ def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, 
     assert request["seed"] == 11
 
 
+@pytest.mark.parametrize("mode", ["execution", "debug"])
+def test_the_stability_checkbox_reaches_the_entrypoint_and_the_title(
+    mode: str, served: Any, runner: type[FakeRunner],
+) -> None:
+    """La casilla está viva en los dos modos: bandera en el argv y aviso en el título."""
+    base, session = served
+    assert b'id="stability-test"' in get(base, "/")[1]
+
+    post(base, "/api/run", {"experiment": "level-11", "mode": mode, "stability_test": True})
+
+    request = runner.instances[-1].request
+    assert request["stability_test"] is True
+    assert "--stability-test" in _palletize_argv(request)
+    assert session.title.endswith("· ESTABILIDAD")
+
+
+def test_without_the_checkbox_no_stability_flag_is_passed(
+    served: Any, runner: type[FakeRunner],
+) -> None:
+    """Arranca apagada: sin la casilla no hay bandera ni marca en el título."""
+    base, session = served
+    post(base, "/api/run", {"experiment": "level-11", "mode": "execution"})
+
+    request = runner.instances[-1].request
+    assert request["stability_test"] is False
+    assert "--stability-test" not in _palletize_argv(request)
+    assert "ESTABILIDAD" not in session.title
+
+
 LEVELS = (
     ("level-11", "table", 11),
     ("level-13", "table", 13),
@@ -271,6 +300,7 @@ def test_the_selected_level_reaches_the_entrypoint(
         "fast_forward": False,
         "simplified_graphics": False,
         "show_com": False,
+        "stability_test": False,
         "seed": 1,
     }
     assert title.startswith("EJECUCIÓN · " if mode == "execution" else "DEPURACIÓN · ")

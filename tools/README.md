@@ -45,7 +45,9 @@ Cada ajuste viaja como bandera al arrancar; el hijo informa por una tubería de 
 escucha. Lo que no tiene bandera sale apagado del panel, con su porqué escrito al lado:
 la barra de reproducción (`--protocol json` no emite `state`, así que no hay grabación),
 «Pesar cada caja en la muñeca» (issue #25) y «Dejar el visor abierto al acabar». Las dos
-casillas de centro de masa comparten `--show-com`.
+casillas de centro de masa comparten `--show-com`, y «Ensayo de estabilidad al terminar»
+manda `--stability-test` en los dos modos: sí tiene bandera, va encendida, y el título
+del run acaba en `· ESTABILIDAD` para que un run con ensayo se distinga de uno sin él.
 
 El aspecto del panel es el de la marca STACKSPECT: `stable_pallet/web/tokens.css` es una
 copia de `Platform/frontend/styles/colors.css` y `app/globals.css` (colores en claro y

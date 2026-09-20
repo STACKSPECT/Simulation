@@ -20,12 +20,19 @@ if "--viewer" not in sys.argv:
 import imageio.v3 as iio  # noqa: E402
 from theker_telemetry import EpisodeResult, RunLog  # noqa: E402
 
+from src import measure  # noqa: E402
 from src.cell.render import draw_heightmap  # noqa: E402
 from src.cell.scene import build_scene, levels, load_configs  # noqa: E402
+from src.cell.stability import run_stability_test  # noqa: E402
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.planner.naive import BeamPlanner, GridPlanner  # noqa: E402
-from src.telemetry import RunLogSink, episode_result, run_config, save_snapshots  # noqa: E402
+from src.telemetry import (  # noqa: E402
+    RunLogSink,
+    episode_result,
+    run_config,
+    save_snapshots,
+)
 from src.vision.detect import CameraDetector  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
 from src.vision.oracle import OracleDetector, OracleGauge  # noqa: E402
@@ -65,6 +72,11 @@ def parser() -> argparse.ArgumentParser:
                      help="relleno en rejilla: la línea base, y marca el run como oráculo")
     cli.add_argument("--beam-planner", action="store_true",
                      help="el beam search de tools/stable_pallet, para comparar contra él")
+    cli.add_argument(
+        "--stability-test",
+        action="store_true",
+        help="al terminar, aplica 15 sacudidas de transporte y la viga estrecha",
+    )
     return cli
 
 
@@ -124,11 +136,23 @@ def oracle_for(oracle_vision: bool, oracle_gauge: bool, naive_planner: bool,
 
 
 def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
-    if not args.viewer:
-        return run_episode(
+    def execute():
+        episode = run_episode(
             scene, detector, gauge, planner, seed=seed, speed=speed,
             sink=sink, verbose=args.protocol == "text",
         )
+        if args.stability_test:
+            _log(args, "estabilidad: ensayando 15 sacudidas y viga estrecha…")
+            physical = measure.on_pallet(scene, episode.final_placements)
+            episode.stability_test = run_stability_test(
+                scene, [placement.box for placement in physical]
+            )
+            for line in _stability_lines(episode.stability_test):
+                _log(args, line)
+        return episode
+
+    if not args.viewer:
+        return execute()
     import mujoco.viewer
 
     def on_key(keycode: int) -> None:
@@ -146,10 +170,7 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
     ) as viewer:
         scene.viewer = viewer
         try:
-            return run_episode(
-                scene, detector, gauge, planner, seed=seed, speed=speed,
-                sink=sink, verbose=args.protocol == "text",
-            )
+            return execute()
         finally:
             scene.viewer = None
 
@@ -187,6 +208,34 @@ def _save_video(path: Path, episode, index: int, total: int) -> None:
     destination = path if total == 1 else path.with_stem(f"{path.stem}-{index:03d}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     iio.imwrite(destination, frames, fps=1, codec="libx264")
+
+
+def _stability_lines(result: dict) -> list[str]:
+    if not result.get("ran"):
+        return [f"estabilidad: no ejecutada · {result.get('reason', 'sin carga')}"]
+    shake = result["shake"]["summary"]
+    beam = result["beam"]["summary"]
+    axes = ", ".join(
+        f"{axis} {'aguanta' if held else 'vuelca'}"
+        for axis, held in beam["by_axis"].items()
+    )
+    return [
+        (
+            f"estabilidad · sacudidas {shake['mean_score']:.1f}/100 · "
+            f"mínima {shake['min_score']:.1f} · aguanta las 15: "
+            f"{'sí' if shake['held_all'] else 'no'}"
+        ),
+        f"estabilidad · viga estrecha: {axes}",
+    ]
+
+
+def _save_stability(directory: Path, result: dict | None) -> None:
+    if result is None:
+        return
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "stability.json").write_text(
+        json.dumps(result, indent=2), encoding="utf-8"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -258,7 +307,9 @@ def main(argv: list[str] | None = None) -> int:
             if sink is not None:
                 sink.begin(seed)
             episode = _run(scene, detector, gauge, planner, seed, speed, sink, args)
-            save_snapshots(episode, log.directory / str(seed))
+            episode_directory = log.directory / str(seed)
+            save_snapshots(episode, episode_directory)
+            _save_stability(episode_directory, episode.stability_test)
             if sink is not None:
                 result = sink.end(episode)
             else:
@@ -276,6 +327,9 @@ def main(argv: list[str] | None = None) -> int:
                 text += f" · CoG {np_round(state.cog)}"
             lines.append(text)
             _log(args, text)
+            # Las líneas del ensayo NO se acumulan aquí: `execute()` ya las emitió con
+            # `_log`, y el resumen final sólo imprime `lines[-3:]` —meterlas echaría
+            # fuera la línea del episodio y repetiría la de la viga.
             if args.pause and index + 1 < args.episodes:
                 time.sleep(args.pause)
     except KeyboardInterrupt:
