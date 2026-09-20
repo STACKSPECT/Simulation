@@ -145,7 +145,7 @@ def test_static_obstacles_stamp_the_named_tables_of_the_level() -> None:
     expected = float(CFG["auxiliary_table"]["height"]) - deck_z
 
     on_belt = stamp("conveyor", invaded)
-    assert on_belt[row, auxiliary_col] == expected, "la auxiliar existe en los nueve niveles"
+    assert on_belt[row, auxiliary_col] == expected, "la auxiliar existe en todos los niveles"
     assert on_belt[row, pick_col] == 0.0, "la mesa de recogida no se monta fuera de los 1x"
 
     on_table = stamp("table", invaded)

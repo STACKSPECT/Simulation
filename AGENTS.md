@@ -290,7 +290,7 @@ estación y se para. El camión presenta la carga completa y elige siempre la ca
 alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
 encima de la fuente.
 
-Además de la fuente, **los nueve niveles montan una mesa auxiliar vacía** a la derecha
+Además de la fuente, **todos los niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
 el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
 camino del código**; se acepta a propósito como superficie disponible. Deja 50 mm de aire

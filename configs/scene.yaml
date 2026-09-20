@@ -95,7 +95,7 @@ table:
   friction: [0.9, 0.01, 0.001]
   rgba: [0.30, 0.33, 0.37, 1]
 
-# Mesa auxiliar común a los nueve niveles. No es una fuente: empieza vacía y queda
+# Mesa auxiliar común a todos los niveles. No es una fuente: empieza vacía y queda
 # disponible para que el robot aparte un bulto si una estrategia futura lo necesita.
 #
 # Está a la derecha del palé, separada 50 mm de su canto (x=1.20), y por eso no falsea

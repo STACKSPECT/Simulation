@@ -62,7 +62,7 @@ def test_scenes_compile_for_all_sources() -> None:
 
 
 def test_auxiliary_table_exists_in_all_levels() -> None:
-    """Los nueve niveles montan la misma mesa vacía, además de su propia fuente."""
+    """Todos los niveles montan la misma mesa vacía, además de su propia fuente."""
     cfg = load_configs()
     auxiliary = cfg["auxiliary_table"]
     pallet = cfg["pallet"]
