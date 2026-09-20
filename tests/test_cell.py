@@ -23,6 +23,7 @@ from src.cell.stability import run_stability_test  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
+from src.training import simulate_placement  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
 from src.vision.oracle import OracleDetector, OracleGauge  # noqa: E402
 
@@ -142,6 +143,40 @@ def test_stability_test_reuses_the_loaded_pallet_and_restores_it() -> None:
         assert scene.data.eq_active[scene.pallet_weld]
     finally:
         scene.close()
+
+
+def test_weight_training_places_and_tests_without_the_robot() -> None:
+    """El banco salta brazo y fuente, pero conserva caída, contacto y estabilidad."""
+    scene = build_scene(level_id=11, seed=1, simplified=True, with_robot=False)
+    try:
+        robot = scene.mujoco.mj_name2id(
+            scene.model, scene.mujoco.mjtObj.mjOBJ_BODY, "ur10e_base"
+        )
+        assert robot < 0
+        assert scene.model.nu == 0
+    finally:
+        scene.close()
+
+    fast = {
+        "levels_g": [0.15],
+        "axes": ["x"],
+        "duration": 0.20,
+        "settle_seconds": 0.25,
+        "hold_seconds": 0.02,
+        "rest_seconds": 0.02,
+        "beam_settle_seconds": 0.8,
+    }
+    progress = []
+    result = simulate_placement(
+        level=11, seed=1, stability_config=fast, progress=progress.append,
+    )
+    assert result.n_planned >= 1
+    assert result.n_placed >= 1
+    assert result.n_on_pallet >= 1
+    assert result.stability_trials == 3
+    assert result.falls["opportunities"] == result.n_on_pallet * 3
+    assert any(row["phase"] == "placement" for row in progress)
+    assert sum(row["phase"] == "stability" for row in progress) == 3
 
 
 def test_belt_moves_the_package_through_physics() -> None:

@@ -8,7 +8,7 @@ palé, de modo que sólo el contacto y la fricción deciden si la carga aguanta.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import numpy as np
@@ -24,17 +24,69 @@ TRANSPORT_REASONS = {
 }
 
 
-def run_stability_test(scene, boxes: Iterable[Any], config: dict | None = None) -> dict:
+def run_stability_test(
+    scene,
+    boxes: Iterable[Any],
+    config: dict | None = None,
+    progress: Callable[[dict], None] | None = None,
+) -> dict:
     """Aplica 15 sacudidas y dos apoyos en viga sobre la pila física recibida."""
     load = list(boxes)
     if not load:
-        return {"ran": False, "reason": "no hay ninguna caja sobre el palé"}
+        result = {"ran": False, "reason": "no hay ninguna caja sobre el palé"}
+        result["falls"] = count_fallen_boxes(result)
+        return result
     protocol = dict(scene.cfg["stability_test"] if config is None else config)
     trial = _StabilityTrial(scene, load, protocol)
-    return {
+    result = {
         "ran": True,
-        "shake": trial.run_transport(),
-        "beam": trial.run_beam(),
+        "shake": trial.run_transport(progress),
+        "beam": trial.run_beam(progress),
+    }
+    result["falls"] = count_fallen_boxes(result)
+    return result
+
+
+def count_fallen_boxes(result: dict) -> dict:
+    """Cuenta caídas caja-ensayo en las pruebas restauradas del protocolo.
+
+    Cada sacudida y cada orientación de la viga parte de la misma pila. Por eso una
+    misma caja que cae en dos ensayos cuenta dos veces en ``total``: son dos fallos de
+    retención reproducibles, no una caja que siga en el suelo desde el ensayo anterior.
+    ``unique_packages`` conserva además cuántos identificadores distintos fallaron.
+    """
+    if not result.get("ran"):
+        return {
+            "total": 0,
+            "opportunities": 0,
+            "unique_packages": 0,
+            "package_ids": [],
+            "by_protocol": {"shake": 0, "beam": 0},
+        }
+
+    total = 0
+    opportunities = 0
+    package_ids: set[str] = set()
+    by_protocol: dict[str, int] = {}
+    for protocol in ("shake", "beam"):
+        protocol_total = 0
+        for trial in result.get(protocol, {}).get("trials", []):
+            packages = trial.get("packages", [])
+            opportunities += len(packages)
+            for package in packages:
+                if not package.get("fell_off", False):
+                    continue
+                protocol_total += 1
+                package_ids.add(str(package.get("package_id", "")))
+        by_protocol[protocol] = protocol_total
+        total += protocol_total
+    package_ids.discard("")
+    return {
+        "total": total,
+        "opportunities": opportunities,
+        "unique_packages": len(package_ids),
+        "package_ids": sorted(package_ids),
+        "by_protocol": by_protocol,
     }
 
 
@@ -45,7 +97,7 @@ class _StabilityTrial:
         self.config = config
         self.baseline = None
 
-    def run_transport(self) -> dict:
+    def run_transport(self, progress: Callable[[dict], None] | None = None) -> dict:
         cfg = self.config
         self._step(float(cfg["hold_seconds"]))
         self._capture_baseline()
@@ -60,6 +112,18 @@ class _StabilityTrial:
                 result["level"] = level
                 result["score"] = _score(result, float(cfg["max_shift_m"]))
                 trials.append(result)
+                if progress is not None:
+                    progress({
+                        "phase": "stability",
+                        "protocol": "shake",
+                        "trial": len(trials),
+                        "axis": axis,
+                        "peak_accel_g": peak_g,
+                        "fallen_boxes": sum(
+                            bool(item["fell_off"]) for item in result["packages"]
+                        ),
+                        "held": bool(result["held"]),
+                    })
         self._restore_baseline()
         return {
             "levels_g": list(levels),
@@ -70,7 +134,7 @@ class _StabilityTrial:
             "summary": _summarise_transport(trials, axes),
         }
 
-    def run_beam(self) -> dict:
+    def run_beam(self, progress: Callable[[dict], None] | None = None) -> dict:
         cfg = self.config
         if self.baseline is None:
             self._step(float(cfg["hold_seconds"]))
@@ -79,7 +143,19 @@ class _StabilityTrial:
         for axis in ("x", "y"):
             self._restore_baseline()
             self._step(float(cfg["rest_seconds"]))
-            trials.append(self._apply_beam(axis))
+            result = self._apply_beam(axis)
+            trials.append(result)
+            if progress is not None:
+                progress({
+                    "phase": "stability",
+                    "protocol": "beam",
+                    "trial": len(trials),
+                    "axis": axis,
+                    "fallen_boxes": sum(
+                        bool(item["fell_off"]) for item in result["packages"]
+                    ),
+                    "held": bool(result["held"]),
+                })
         self._restore_baseline()
         return {
             "beam_width_mm": float(cfg["beam_width"]) * 1_000,

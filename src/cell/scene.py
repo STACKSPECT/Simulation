@@ -1064,8 +1064,11 @@ def build_mjcf(
     held: HeldPackage | None = None,
     *,
     simplified: bool = False,
+    with_robot: bool = True,
 ) -> str:
-    """El MJCF entero de la celda, para esta fuente y esta carga."""
+    """El MJCF entero, o su variante física sin UR10e para entrenar pesos."""
+    if held is not None and not with_robot:
+        raise ValueError("una escena sin robot no puede llevar un paquete agarrado")
     held_index = held.index if held is not None else -1
     packages = "\n".join(
         _package_xml(box, held, simplified) for box in boxes if box.index != held_index
@@ -1075,7 +1078,10 @@ def build_mjcf(
     carried = "".join(
         _package_xml(box, held, simplified) for box in boxes if box.index == held_index
     )
-    welds = "\n      ".join(_weld_xml(box) for box in boxes if box.index != held_index)
+    welds = (
+        "\n      ".join(_weld_xml(box) for box in boxes if box.index != held_index)
+        if with_robot else ""
+    )
 
     # Mesa y cinta cuelgan de un carril que sale de la caja negra; el camión no, porque
     # su carga ya viene apilada en el remolque. Ver `lane_for`.
@@ -1098,6 +1104,17 @@ def build_mjcf(
     light = lighting_for(cfg, level)
     materials = _MATERIALS + (plant.materials_xml() if level.decor == "plant" else "")
     episode = cfg["episode"]
+    robot = _ur10e_xml(cfg, _cups_xml(cfg, simplified), carried, simplified) if with_robot else ""
+    actuators = "" if not with_robot else """
+    <general class="size4" name="shoulder_pan" joint="shoulder_pan_joint"/>
+    <general class="size4" name="shoulder_lift" joint="shoulder_lift_joint"/>
+    <general class="size3_limited" name="elbow" joint="elbow_joint"/>
+    <general class="size2" name="wrist_1" joint="wrist_1_joint"/>
+    <general class="size2" name="wrist_2" joint="wrist_2_joint"/>
+    <general class="size2" name="wrist_3" joint="wrist_3_joint"/>"""
+    sensors = "" if not with_robot else """
+    <force name="ft_force" site="ft_site"/>
+    <torque name="ft_torque" site="ft_site"/>"""
 
     return f"""<mujoco model="celda de paletizado UR10e · {level.name}">
   <compiler angle="radian" autolimits="true" meshdir="{mesh_dir(cfg)}"/>
@@ -1143,7 +1160,7 @@ def build_mjcf(
 {_decor_xml(cfg, level, simplified)}
 {_stability_beam_xml(cfg)}
 {_pallet_xml(cfg, simplified)}
-{_ur10e_xml(cfg, _cups_xml(cfg, simplified), carried, simplified)}
+{robot}
 {packages}
   </worldbody>
   <equality>
@@ -1155,16 +1172,10 @@ def build_mjcf(
     <exclude body1="world" body2="pallet"/>
   </contact>
   <actuator>
-    <general class="size4" name="shoulder_pan" joint="shoulder_pan_joint"/>
-    <general class="size4" name="shoulder_lift" joint="shoulder_lift_joint"/>
-    <general class="size3_limited" name="elbow" joint="elbow_joint"/>
-    <general class="size2" name="wrist_1" joint="wrist_1_joint"/>
-    <general class="size2" name="wrist_2" joint="wrist_2_joint"/>
-    <general class="size2" name="wrist_3" joint="wrist_3_joint"/>
+    {actuators}
   </actuator>
   <sensor>
-    <force name="ft_force" site="ft_site"/>
-    <torque name="ft_torque" site="ft_site"/>
+    {sensors}
   </sensor>
 </mujoco>"""
 
@@ -1183,7 +1194,7 @@ class PalletScene:
     """
 
     def __init__(self, cfg: dict, level: Level, boxes: list[Box], seed: int,
-                 *, simplified: bool = False):
+                 *, simplified: bool = False, with_robot: bool = True):
         import mujoco
 
         self.mujoco = mujoco
@@ -1192,6 +1203,7 @@ class PalletScene:
         self.boxes = boxes
         self.seed = seed
         self.simplified = simplified
+        self.with_robot = with_robot
         self.held: HeldPackage | None = None
         self.rng = np.random.default_rng(seed)
         # La rejilla de espera dentro de la caja negra, la MISMA que dimensionó el
@@ -1211,11 +1223,14 @@ class PalletScene:
         self._wall_origin = 0.0
         self._next_frame = 0.0
 
-        self._compile(build_mjcf(cfg, level, boxes, None, simplified=simplified))
+        self._compile(build_mjcf(
+            cfg, level, boxes, None, simplified=simplified, with_robot=with_robot,
+        ))
         self.home = np.asarray(cfg["robot"]["ik_seed_qpos"], dtype=float)
         self.observe_qpos = np.asarray(cfg["robot"]["observe_qpos"], dtype=float)
-        self.data.qpos[self.arm_qpos] = self.home
-        self.data.ctrl[:] = self.home
+        if with_robot:
+            self.data.qpos[self.arm_qpos] = self.home
+            self.data.ctrl[:] = self.home
         mujoco.mj_forward(self.model, self.data)
 
     # ── el modelo ────────────────────────────────────────────────────────────
@@ -1230,13 +1245,28 @@ class PalletScene:
         self.data = mujoco.MjData(self.model)
         self.ik_data = mujoco.MjData(self.model)
 
-        names = self.cfg["robot"]["joints"]
-        joint_ids = [mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, n) for n in names]
-        self.arm_qpos = [self.model.jnt_qposadr[i] for i in joint_ids]
-        self.arm_dofs = [self.model.jnt_dofadr[i] for i in joint_ids]
-        self.tcp_site = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, TCP_SITE)
-        self.ft_site = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, "ft_site")
-        self.tool_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "tool")
+        self.arm_qpos: list[int] = []
+        self.arm_dofs: list[int] = []
+        self.tcp_site = -1
+        self.ft_site = -1
+        self.tool_body = -1
+        if self.with_robot:
+            names = self.cfg["robot"]["joints"]
+            joint_ids = [
+                mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
+                for name in names
+            ]
+            self.arm_qpos = [self.model.jnt_qposadr[index] for index in joint_ids]
+            self.arm_dofs = [self.model.jnt_dofadr[index] for index in joint_ids]
+            self.tcp_site = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_SITE, TCP_SITE
+            )
+            self.ft_site = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_SITE, "ft_site"
+            )
+            self.tool_body = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_BODY, "tool"
+            )
         self.pallet_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pallet")
         self.pallet_weld = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_EQUALITY, "pallet_anchor"
@@ -1263,6 +1293,8 @@ class PalletScene:
         Se conserva el estado: la pose del brazo, la de cada caja libre y el reloj. Lo
         único que cambia es de quién cuelga el cartón sellado.
         """
+        if not self.with_robot:
+            raise RuntimeError("una escena sin robot no se puede reconstruir para agarrar")
         mujoco = self.mujoco
         arm = np.asarray(self.data.qpos[self.arm_qpos]).copy()
         pallet_qpos = np.asarray(self.data.qpos[self.pallet_qpos]).copy()
@@ -1274,8 +1306,10 @@ class PalletScene:
         )
 
         self.held = held
-        self._compile(build_mjcf(self.cfg, self.level, self.boxes, held,
-                                 simplified=self.simplified))
+        self._compile(build_mjcf(
+            self.cfg, self.level, self.boxes, held,
+            simplified=self.simplified, with_robot=True,
+        ))
 
         self.data.qpos[self.arm_qpos] = arm
         self.data.ctrl[:] = arm
@@ -1504,17 +1538,23 @@ class PalletScene:
 
 
 def build_scene(cfg: dict | None = None, level_id: int | None = None, seed: int = 0,
-                *, simplified: bool = False) -> PalletScene:
+                *, simplified: bool = False, with_robot: bool = True) -> PalletScene:
     """La celda montada y con la física asentada, para el nivel que se pida.
 
     Las cajas salen aparcadas fuera de escena: ponerlas donde empiezan es trabajo de la
     fuente (`src/cell/conveyor.py::make_supply(...).stage(scene)`), porque dónde empieza
     la carga es precisamente lo que distingue una tarea de otra.
+
+    ``with_robot=False`` conserva palé, cajas y ensayo de estabilidad, pero elimina
+    cuerpo, actuadores, sensores y welds del UR10e. Sólo lo usa el banco de pesos: un
+    episodio de celda siempre deja el valor por defecto.
     """
     cfg = load_configs() if cfg is None else cfg
     level = level_for(cfg, level_id)
     boxes = build_catalogue(cfg, level, seed)
-    scene = PalletScene(cfg, level, boxes, seed, simplified=simplified)
+    scene = PalletScene(
+        cfg, level, boxes, seed, simplified=simplified, with_robot=with_robot,
+    )
     scene.settle(0.20)
     return scene
 
