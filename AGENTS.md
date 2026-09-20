@@ -290,11 +290,32 @@ Tres avisos:
 
 ### Las fuentes
 
-`cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. La
-mesa deja los bultos preparados y no mueve nada. La cinta avanza físicamente hasta la
-estación y se para. El camión presenta la carga completa y elige siempre la caja más
-alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
-encima de la fuente.
+`cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. El
+camión presenta la carga completa y elige siempre la caja más alta, la única que no
+sostiene otra. **La mesa y la cinta son la MISMA banda**, y lo único que las distingue es
+dónde acaba el carril: `scene.lane_for` se lo da a cada una, y por eso `TableSupply` es un
+`Belt` sin cuerpo. `release()` se llama cuando la mano ya no está encima de la fuente.
+
+**Los bultos salen de una caja negra, y eso no es decorado.** Los que esperan se aparcaban
+en fila —`x = -3 - i*0.7`, o sea 21 m con los treinta del nivel 17— y se veían salir de la
+escena hacia el infinito. Ahora esperan en rejilla dentro de un cerramiento opaco que se
+dimensiona solo con la carga (`scene.parking_grid` calcula la rejilla y el cerramiento se
+ajusta a ella: son la misma cuenta a propósito, porque si cada uno la hiciera por su lado
+los bultos aparecerían atravesando la pared). Treinta bultos ocupan ahora 3,00 m en vez de
+21. Es además lo que la ficción dice: el sistema no sabe lo que viene.
+
+Tres cosas de la banda de mesa que no se deducen leyendo el código:
+
+- **Acaba en el canto de la mesa y comparte su cota**, las dos a 0.58. `Belt._riding` mira
+  la ALTURA para decidir a quién arrastra, así que la banda sigue empujando ya sobre la
+  mesa y para el bulto en su centro. Medio centímetro de escalón y deja de empujar justo
+  al llegar: el episodio muere en `timeout` y no se ve por qué. Hay un test sin simulador
+  que ancla los tres números.
+- **El centro de la banda se DERIVA del canto de la mesa**, no va escrito. Dos números que
+  hay que cuadrar a mano acaban descuadrados.
+- **Cuesta tiempo simulado**, que antes no se pagaba: 1.20 m a 0.25 m/s son 4,8 s por
+  bulto. El nivel 11 pasó de 50 a 70,4 s y el guardia de tiempo se rebasó con la cuenta
+  al lado. El 17, con treinta bultos, tarda 275 s de los 600 de `max_duration_s`.
 
 Además de la fuente, **los doce niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde

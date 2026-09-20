@@ -149,7 +149,12 @@ class Belt(_BaseSupply):
 
     def __init__(self, scene):
         super().__init__(scene)
-        cfg = scene.cfg["conveyor"]
+        # El carril lo decide la FUENTE del nivel, no esta clase: la cinta entrega bajo
+        # el brazo y la mesa entrega a la mesa, y por lo demás son la misma banda. Ver
+        # `scene.lane_for` y `src/cell/table.py`.
+        from src.cell.scene import lane_for
+
+        cfg = lane_for(scene.cfg, scene.level.source) or scene.cfg["conveyor"]
         self.speed = float(cfg["speed"])
         self.station_x, self.station_y = (float(v) for v in cfg["station"])
         self.tol = float(cfg["station_tol"])

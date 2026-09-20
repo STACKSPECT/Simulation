@@ -172,6 +172,42 @@ auxiliary_table:
   friction: [0.9, 0.01, 0.001]
   rgba: [0.20, 0.38, 0.48, 1]
 
+# ── LA CAJA NEGRA, Y LA CINTA QUE SALE DE ELLA ───────────────────────────────
+#
+# De aquí salen los bultos en los niveles de mesa (1x) y de cinta (2x). Es OPACA a
+# propósito: el sistema no sabe lo que viene, y lo que había antes decía justo lo
+# contrario —los que esperaban se aparcaban en fila, `x = -3 - i*0.7`, o sea 21 m de
+# cartones perdiéndose en el horizonte con treinta bultos—.
+#
+# Se dimensiona SOLA con la carga del nivel: la rejilla de espera se calcula en
+# `src/cell/scene.py::parking_grid` y el cerramiento se ajusta a ella, así que un nivel
+# de cuatro bultos tiene una caseta pequeña y uno de treinta, un almacén. El `pitch` sale
+# del mayor del catálogo (0.55 x 0.36) más cinco centímetros de aire: los que esperan no
+# se tocan entre sí, que es lo que los mantiene quietos.
+black_box:
+  pitch: [0.60, 0.42]            # rejilla de espera, [x, y]
+  columns: 5                     # a lo ancho; las filas salen de cuántos bultos haya
+  margin: 0.15                   # aire entre la rejilla y la pared
+  wall: 0.05
+  height: 1.25
+  gap: 0.10                      # entre la boca y el arranque de la banda
+  rgba: [0.07, 0.08, 0.09, 1]
+
+# La banda de los niveles de MESA. Misma cota que la mesa —0.58— para que el bulto pase
+# de una a otra sin escalón: `Belt._riding` mira la altura, así que sigue arrastrando ya
+# sobre la mesa y por eso puede dejarlo en su centro. Acaba justo en el canto de la mesa.
+#
+# Va en su propio bloque y no reutiliza `conveyor` porque son dos carriles distintos: el
+# de la cinta entrega al brazo y éste entrega a la mesa, y comparten todo menos dónde
+# acaban.
+feeder:
+  dims: [1.20, 0.44]             # [largo, ancho] COMPLETAS
+  height: 0.58
+  speed: 0.25
+  friction: [1.10, 0.02, 0.002]
+  station_tol: 0.030
+  timeout_s: 25.0
+
 # La cinta. `station` es donde el paquete se PARA para que el brazo lo coja, y está
 # dentro del alcance comprobado: coincide con el centro de la mesa, que es la pose de
 # agarre ya barrida con IK.

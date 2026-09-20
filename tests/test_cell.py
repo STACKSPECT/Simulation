@@ -319,21 +319,19 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
             supply.stage(scene)
             arm = ArmController(scene)
             targets = []
-            if scene.level.source == "conveyor":
+            if scene.level.source in ("conveyor", "table"):
+                # Las dos entregan en una ESTACIÓN fija —bajo el brazo la cinta, en el
+                # centro de la mesa la banda de mesa— y los que esperan están dentro de
+                # la caja negra, a x = -2 y más allá. Pedirle al brazo que llegue hasta
+                # ahí no prueba nada sobre su alcance: el bulto sale de ahí en la banda.
                 station_x, station_y = scene.station
                 for box in scene.boxes:
                     targets.append((station_x, station_y,
                                     scene.surface_z + box.dims_m[2] + arm.cup_gap, 0.0))
             else:
-                # Sólo los bultos que están PUESTOS. La mesa no da para todos —ocho
-                # sorteados suman más área que ella— y los que no caben esperan
-                # aparcados fuera de la escena, a x = -3 y más allá: pedirle al brazo que
-                # llegue hasta ahí no prueba nada sobre su alcance. Entran a la mesa
-                # cuando queda hueco, y entonces sí caen dentro de esta envolvente.
-                staged = getattr(supply, "staged", -1)
+                # El camión presenta la carga entera en la bahía, así que aquí sí hay que
+                # poder llegar a todas.
                 for box in scene.boxes:
-                    if staged != -1 and box.index != staged:
-                        continue
                     top = scene.box_top_center(box.index)
                     targets.append((float(top[0]), float(top[1]),
                                     float(top[2]) + arm.cup_gap, scene.box_yaw(box.index)))
@@ -382,8 +380,18 @@ def test_joint_targets_use_the_nearest_equivalent_angle() -> None:
         scene.close()
 
 
-def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
-    """Regresión del ciclo que tardaba 75,9 s por parar después de cada waypoint."""
+def test_level_11_physical_cycle_stays_within_its_time_budget() -> None:
+    """Regresión del ciclo que tardaba 75,9 s por parar después de cada waypoint.
+
+    El presupuesto eran 50 s cuando el bulto aparecía ya puesto en la mesa. Ahora llega
+    por la banda desde la caja negra, y eso son 1.20 m a 0.25 m/s = 4,8 s por bulto que
+    antes no se pagaban: cuatro bultos, 70,4 s medidos. El umbral sube a 85 s, que deja
+    el mismo margen relativo que tenía —el bug original se iría a ~96 s y seguiría
+    saltando— sin convertir el guardia en un adorno.
+
+    Si algún día la banda se acorta o cambia de velocidad, este número se vuelve a medir;
+    no se sube hasta que deje de fallar.
+    """
     scene = build_scene(level_id=11, seed=1, simplified=True)
     try:
         episode = run_episode(
@@ -395,7 +403,7 @@ def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
             speed=1.0,
         )
         assert episode.success, episode.failure
-        assert episode.duration_s < 50.0
+        assert episode.duration_s < 85.0, episode.duration_s
     finally:
         scene.close()
 

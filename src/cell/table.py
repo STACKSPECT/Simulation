@@ -1,4 +1,4 @@
-"""Fuente de mesa: un bulto preparado, y el siguiente entra cuando se lo llevan.
+"""Fuente de mesa: una cinta saca los bultos de la caja negra y los deja en la mesa.
 
 ── POR QUÉ UNO, Y NO LA MESA LLENA ──────────────────────────────────────────────
 
@@ -26,61 +26,36 @@ ahí la holgura máxima que cabe son 80 mm:
 
 Es decir: la holgura que hace falta para extraer sin tocar es mayor que la que cabe. Con
 esta mesa y esta herramienta, la única configuración que no derriba nada es **un bulto**.
-El resto espera aparcado fuera de la escena y entra cuando el anterior se va, que es lo
-que hace un operario con una mesa pequeña.
 
-Si se quiere la mesa llena, lo que hay que cambiar es la mesa —o sacar el bulto por
-arriba antes de trasladar—, no el número de la holgura.
+── DE DÓNDE SALE ESE BULTO ──────────────────────────────────────────────────────
+
+Antes aparecía ya puesto en el centro de la mesa, y los demás esperaban aparcados en fila
+fuera de la escena, en `x = -3 - i*0.7`: con treinta bultos son 21 m de cartones
+perdiéndose en el horizonte. Ahora **llegan por una cinta que sale de la caja negra**, que
+es lo que pasa en una planta y además cuenta la verdad: el sistema no sabe lo que viene.
+
+Y por eso esta clase es un `Belt` y no otra cosa. La mecánica es la misma y lo único que
+cambia es **dónde acaba el carril**: `scene.lane_for` da el de la cinta a los niveles 2x,
+que entrega bajo el brazo, y el de la mesa a los 1x, que entrega a la mesa. La banda de
+mesa acaba justo en su canto y comparte cota con ella —las dos a 0.58—, así que el cartón
+cruza sin escalón; y como `Belt._riding` mira la ALTURA y no la x, la banda lo sigue
+arrastrando ya sobre la mesa y lo para en su centro, que es donde más canto le queda por
+los cuatro lados. No hay teletransporte en ningún punto del trayecto.
+
+Lo que esto NO cambia es el resto del contrato: sigue habiendo un bulto cada vez, el
+siguiente entra cuando el brazo se ha llevado el anterior, y un carril que no entrega
+antes de `timeout_s` sigue siendo un `timeout` y no una causa de fallo inventada.
 """
 
 from __future__ import annotations
 
-import numpy as np
-
-from src.cell.conveyor import _BaseSupply
+from src.cell.conveyor import Belt
 
 
-class TableSupply(_BaseSupply):
-    """Un bulto preparado en el centro de la mesa. Presentarlo no lo mueve."""
+class TableSupply(Belt):
+    """La cinta de la caja negra, que acaba en la mesa en vez de bajo el brazo.
 
-    def stage(self, scene) -> None:
-        cfg = scene.cfg["table"]
-        self.center = tuple(float(v) for v in cfg["center"])
-        half_x, half_y, _ = (float(v) for v in cfg["size"])
-        self.half = (half_x, half_y)
-        self.top = float(cfg["height"])
-        self.spread = np.radians(scene.level.yaw_jitter_deg)
-        self.jitter = scene.level.pos_jitter_m
-        self.staged: int | None = None
-        if scene.boxes:
-            self._put(scene, scene.boxes[0])
-        scene.settle_until_rest()
-
-    def present(self, scene) -> str | None:
-        """Devuelve el bulto de la mesa; una mesa no puede atascarse."""
-        if not self.pending:
-            self.exhausted = True
-            return None
-        self.current = self.pending[0]
-        if self.staged != self.current:
-            self._put(scene, scene.boxes[self.current])
-            scene.settle_until_rest()
-        return scene.boxes[self.current].package_id
-
-    def _put(self, scene, box) -> None:
-        """Al centro de la mesa, que es donde más canto le queda por los cuatro lados."""
-        x, y = self.center
-        if self.jitter > 0:
-            x += float(scene.rng.uniform(-self.jitter, self.jitter))
-            y += float(scene.rng.uniform(-self.jitter, self.jitter))
-        yaw = float(scene.rng.uniform(-self.spread, self.spread)) if self.spread else 0.0
-        scene.place_box(box.index, (x, y, self.top + box.dims_m[2] / 2 + 0.002), yaw)
-        self.staged = box.index
-
-    def fits(self, box) -> bool:
-        """Si el bulto cabe entero en la mesa. Uno que sobresale se cae y se mide en el suelo."""
-        cosine, sine = abs(np.cos(self.spread)), abs(np.sin(self.spread))
-        span_x = box.dims_m[0] * cosine + box.dims_m[1] * sine
-        span_y = box.dims_m[0] * sine + box.dims_m[1] * cosine
-        return (span_x / 2 + self.jitter <= self.half[0]
-                and span_y / 2 + self.jitter <= self.half[1])
+    Sin cuerpo propio a propósito: cualquier cosa que hubiera aquí sería mecánica de
+    cinta duplicada, y dos copias de eso acaban discrepando. Lo único que distingue a
+    esta fuente vive en `scene.lane_for`, que es un dato, no código.
+    """

@@ -654,7 +654,83 @@ def _stability_beam_xml(cfg: dict) -> str:
     </body>"""
 
 
-def _belt_xml(cfg: dict, simplified: bool) -> str:
+def lane_for(cfg: dict, source: str) -> dict | None:
+    """El carril por el que llegan los bultos, o `None` si la fuente no tiene.
+
+    Mesa y cinta comparten mecánica y se diferencian en dónde ACABA la banda: la de la
+    cinta entrega al brazo y la de la mesa entrega a la mesa. El camión no tiene carril
+    —la carga ya viene apilada en el remolque— y por eso tampoco tiene caja negra.
+    """
+    if source == "conveyor":
+        belt = dict(cfg["conveyor"])
+        belt["station"] = tuple(float(v) for v in belt["station"])
+        return belt
+    if source != "table":
+        return None
+    # La banda de mesa acaba en el canto de la mesa y comparte su carril y su cota, para
+    # que el bulto cruce sin escalón. Su centro se deriva: no hay dos números que cuadrar.
+    table = cfg["table"]
+    feeder = dict(cfg["feeder"])
+    table_x, table_y = (float(v) for v in table["center"])
+    edge = table_x - float(table["size"][0])
+    length = float(feeder["dims"][0])
+    feeder["center"] = (edge - length / 2, table_y)
+    feeder["station"] = (table_x, table_y)       # se entrega al CENTRO de la mesa
+    return feeder
+
+
+def parking_grid(cfg: dict, boxes: list[Box], lane: dict) -> list[tuple[float, float]]:
+    """Dónde espera cada bulto dentro de la caja negra, en rejilla y sin tocarse.
+
+    Antes era una fila —`x = -3 - i*0.7`— que con treinta bultos medía 21 m y se veía
+    salir de la escena. La rejilla ocupa lo mismo en superficie y cabe en un cerramiento.
+    """
+    black = cfg["black_box"]
+    pitch_x, pitch_y = (float(v) for v in black["pitch"])
+    columns = max(1, int(black["columns"]))
+    lane_x = float(lane["center"][0]) - float(lane["dims"][0]) / 2 - float(black["gap"])
+    lane_y = float(lane["center"][1])
+    slots = []
+    for index in range(len(boxes)):
+        row, column = divmod(index, columns)
+        slots.append((
+            lane_x - pitch_x / 2 - row * pitch_x,
+            lane_y + (column - (columns - 1) / 2) * pitch_y,
+        ))
+    return slots
+
+
+def _black_box_xml(cfg: dict, boxes: list[Box], lane: dict) -> str:
+    """El cerramiento opaco, ajustado a la rejilla de espera que tenga que tapar."""
+    black = cfg["black_box"]
+    slots = parking_grid(cfg, boxes, lane)
+    pitch_x, pitch_y = (float(v) for v in black["pitch"])
+    margin, wall = float(black["margin"]), float(black["wall"])
+    height, rgba = float(black["height"]), " ".join(str(v) for v in black["rgba"])
+
+    xs = [x for x, _ in slots]
+    ys = [y for _, y in slots]
+    x0, x1 = min(xs) - pitch_x / 2 - margin, max(xs) + pitch_x / 2 + margin
+    y0, y1 = min(ys) - pitch_y / 2 - margin, max(ys) + pitch_y / 2 + margin
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_x, half_y = (x1 - x0) / 2, (y1 - y0) / 2
+
+    # Cinco caras: las cuatro paredes y el techo. Sin suelo —los bultos se apoyan en el
+    # del mundo— y la boca (+x) abierta, que es por donde salen a la banda.
+    panels = [
+        (cx - half_x - wall, cy, height / 2, wall, half_y + wall, height / 2),   # fondo
+        (cx, cy - half_y - wall, height / 2, half_x, wall, height / 2),          # lateral
+        (cx, cy + half_y + wall, height / 2, half_x, wall, height / 2),          # lateral
+        (cx, cy, height + wall, half_x + wall, half_y + wall, wall),             # techo
+    ]
+    return "\n".join(
+        f'    <geom name="black_box_{index}" type="box" pos="{px:.4f} {py:.4f} {pz:.4f}" '
+        f'size="{sx:.4f} {sy:.4f} {sz:.4f}" rgba="{rgba}" contype="0" conaffinity="0"/>'
+        for index, (px, py, pz, sx, sy, sz) in enumerate(panels)
+    )
+
+
+def _belt_xml(cfg: dict, simplified: bool, lane: dict | None = None) -> str:
     """La banda transportadora. La superficie es estática; lo que se mueve es la carga.
 
     MuJoCo no tiene primitiva de cinta. De las dos opciones razonables —una banda con
@@ -665,7 +741,7 @@ def _belt_xml(cfg: dict, simplified: bool) -> str:
 
     La fricción es alta a propósito: es lo que arrastra el cartón sin que patine.
     """
-    belt = cfg["conveyor"]
+    belt = cfg["conveyor"] if lane is None else lane
     x, y = belt["center"]
     length, width = belt["dims"]
     top = belt["height"]
@@ -928,11 +1004,16 @@ def build_mjcf(
     )
     welds = "\n      ".join(_weld_xml(box) for box in boxes if box.index != held_index)
 
+    # Mesa y cinta cuelgan de un carril que sale de la caja negra; el camión no, porque
+    # su carga ya viene apilada en el remolque. Ver `lane_for`.
+    lane = lane_for(cfg, level.source)
     source_fixture = {
-        "table": lambda: add_table(cfg["table"]),
-        "conveyor": lambda: _belt_xml(cfg, simplified),
+        "table": lambda: add_table(cfg["table"]) + "\n" + _belt_xml(cfg, simplified, lane),
+        "conveyor": lambda: _belt_xml(cfg, simplified, lane),
         "truck": lambda: _truck_xml(cfg, simplified),
     }[level.source]()
+    if lane is not None:
+        source_fixture += "\n" + _black_box_xml(cfg, boxes, lane)
     auxiliary_table = add_table(cfg["auxiliary_table"], name="auxiliary_table")
 
     meshes = (
@@ -1040,6 +1121,12 @@ class PalletScene:
         self.simplified = simplified
         self.held: HeldPackage | None = None
         self.rng = np.random.default_rng(seed)
+        # La rejilla de espera dentro de la caja negra, la MISMA que dimensionó el
+        # cerramiento al construir el MJCF. Se calcula una vez: si `park_box` la
+        # recalculara por su cuenta y los dos no coincidieran, los que esperan
+        # aparecerían atravesando la pared y no se vería por qué.
+        lane = lane_for(cfg, level.source)
+        self._parking = None if lane is None else parking_grid(cfg, boxes, lane)
         # Tiempo SIMULADO desde que arrancó el episodio. Es el que va a `events.ts`, no
         # el de reloj: así dos ejecuciones de la misma semilla dan la misma línea
         # temporal por rápida que sea la máquina.
@@ -1182,9 +1269,19 @@ class PalletScene:
         self.mujoco.mj_forward(self.model, self.data)
 
     def park_box(self, index: int) -> None:
-        """Deja una caja fuera de escena, donde no estorbe ni toque nada."""
+        """Deja una caja esperando DENTRO de la caja negra, en su hueco de la rejilla.
+
+        Antes era una fila que se iba de la escena —21 m con treinta bultos—. Ahora los
+        que esperan están donde dice la ficción: fuera de la vista, no en el infinito.
+        Sin carril —el camión— se conserva la fila de siempre, que allí no se ve porque
+        la carga entera está en el remolque desde el principio.
+        """
         height = self.boxes[index].dims_m[2]
-        self.place_box(index, (-3.0 - index * 0.7, 0.0, height / 2 + 0.002))
+        if self._parking is None:
+            self.place_box(index, (-3.0 - index * 0.7, 0.0, height / 2 + 0.002))
+            return
+        x, y = self._parking[index]
+        self.place_box(index, (x, y, height / 2 + 0.002))
 
     # ── física ───────────────────────────────────────────────────────────────
 
