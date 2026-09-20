@@ -19,6 +19,7 @@ from scripts.palletize import (  # noqa: E402
     _request_unwind,
     install_termination_unwind,
     oracle_for,
+    parser,
 )
 from src import measure  # noqa: E402
 from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
@@ -94,6 +95,15 @@ def test_level_ids_encode_the_source() -> None:
     assert {level.source for level in catalogue.values()} == set(SOURCES)
     for level in catalogue.values():
         assert level.id // 10 == SOURCE_DECADE[level.source]
+
+
+def test_the_stability_protocol_is_explicit_and_opt_in() -> None:
+    protocol = CFG["stability_test"]
+    assert protocol["levels_g"] == [0.05, 0.15, 0.30, 0.50, 0.80]
+    assert protocol["axes"] == ["x", "y", "z"]
+    assert len(protocol["levels_g"]) * len(protocol["axes"]) == 15
+    assert parser().parse_args([]).stability_test is False
+    assert parser().parse_args(["--stability-test"]).stability_test is True
 
 
 def test_beam_weights_sum_to_one() -> None:

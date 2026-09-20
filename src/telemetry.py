@@ -120,6 +120,35 @@ def episode_result(episode: Episode, scene) -> EpisodeResult:
         name: _r(np.mean([plan.breakdown.get(name, 0.0) for plan in episode.plans]))
         for name in sorted(names)
     }
+    metrics = {
+        "cog_offset_xy": _r(np.linalg.norm(state.cog[:2])) if state else 0.0,
+        "fill_ratio": _r(state.fill_ratio) if state else 0.0,
+        "settle_drift": _r(max(episode.drifts)) if episode.drifts else 0.0,
+        "n_layers": max((placement.layer for placement in physical), default=0),
+        "layer_flatness": _r(measure.layer_flatness(physical)),
+        "max_overhang": _r(
+            max((placement.overhang for placement in physical), default=0.0)
+        ),
+        "mean_planner_score": _r(np.mean(scores)) if scores else 0.0,
+        "planner_score_breakdown": breakdown,
+        "score": round(
+            sum(placement.placed for placement in episode.final_placements)
+            / episode.n_objects,
+            4,
+        ) if episode.n_objects else 0.0,
+    }
+    # El ensayo no es una columna: va dentro de `metrics`, que es `jsonb` y donde
+    # sobrar es inocuo. Sólo el resumen; los 51 KB de detalle van a `stability.json`.
+    if episode.stability_test is not None:
+        test = episode.stability_test
+        metrics["stability_test"] = (
+            {
+                "ran": True,
+                "shake": test["shake"]["summary"],
+                "beam": test["beam"]["summary"],
+            }
+            if test.get("ran") else test
+        )
     return EpisodeResult(
         seed=episode.seed,
         level=scene.level.id,
@@ -133,23 +162,7 @@ def episode_result(episode: Episode, scene) -> EpisodeResult:
         # La tarea es de dónde se coge: mesa, cinta o camión. Sale de la fuente del
         # nivel y no de una constante, que es lo que permite comparar las tres.
         task=scene.level.source,
-        metrics={
-            "cog_offset_xy": _r(np.linalg.norm(state.cog[:2])) if state else 0.0,
-            "fill_ratio": _r(state.fill_ratio) if state else 0.0,
-            "settle_drift": _r(max(episode.drifts)) if episode.drifts else 0.0,
-            "n_layers": max((placement.layer for placement in physical), default=0),
-            "layer_flatness": _r(measure.layer_flatness(physical)),
-            "max_overhang": _r(
-                max((placement.overhang for placement in physical), default=0.0)
-            ),
-            "mean_planner_score": _r(np.mean(scores)) if scores else 0.0,
-            "planner_score_breakdown": breakdown,
-            "score": round(
-                sum(placement.placed for placement in episode.final_placements)
-                / episode.n_objects,
-                4,
-            ) if episode.n_objects else 0.0,
-        },
+        metrics=metrics,
     )
 
 

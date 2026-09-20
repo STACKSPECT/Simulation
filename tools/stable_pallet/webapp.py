@@ -112,6 +112,8 @@ def _palletize_argv(request: dict[str, Any]) -> list[str]:
         argv.append("--simplified-graphics")
     if request.get("show_com"):
         argv.append("--show-com")
+    if request.get("stability_test"):
+        argv.append("--stability-test")
     argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
     if request.get("seed") is not None:
         argv.extend(("--seed", str(int(request["seed"]))))
@@ -288,7 +290,8 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     Los dos modos llevan `source` y `level`. DEPURACIÓN no elige un experimento legado:
     `PalletizeClient` añade `--no-telemetry` según `mode`. Cualquiera de las dos casillas
     de centro de masa enciende `--show-com`: el entrypoint sólo tiene esa bandera, y
-    pinta el CoG final del palé en el informe.
+    pinta el CoG final del palé en el informe. El ensayo de estabilidad va en los dos
+    modos y se anuncia en el título, que es lo único que distingue un run con ensayo.
     """
     item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
     if item is None:
@@ -306,9 +309,12 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         "fast_forward": bool(payload.get("fast_forward")),
         "simplified_graphics": bool(payload.get("simplified_graphics")),
         "show_com": bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com")),
+        "stability_test": bool(payload.get("stability_test")),
         "seed": payload.get("seed"),
     }
     title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"
+    if request["stability_test"]:
+        title += " · ESTABILIDAD"
     return request, title
 
 

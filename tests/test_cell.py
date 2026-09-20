@@ -19,6 +19,7 @@ from src.cell.arm import ArmController  # noqa: E402
 from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import build_catalogue, build_scene, levels, load_configs  # noqa: E402
+from src.cell.stability import run_stability_test  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
@@ -97,6 +98,40 @@ def test_all_four_cameras_exist() -> None:
             for index in range(scene.model.ncam)
         }
         assert set(VIEWS) <= names
+    finally:
+        scene.close()
+
+
+def test_stability_test_reuses_the_loaded_pallet_and_restores_it() -> None:
+    """El ensayo mueve la pila real y deja la escena en su estado post-paletizado."""
+    scene = build_scene(level_id=11, seed=1, simplified=True)
+    try:
+        box = scene.boxes[0]
+        px, py = scene.pallet_center
+        scene.place_box(
+            box.index,
+            (px, py, scene.deck_z + box.dims_m[2] / 2 + 0.002),
+        )
+        scene.settle(0.4)
+        before = scene.box_pose(box.index)[0].copy()
+        fast = {
+            **scene.cfg["stability_test"],
+            "levels_g": [0.15],
+            "axes": ["x"],
+            "duration": 0.20,
+            "settle_seconds": 0.25,
+            "hold_seconds": 0.02,
+            "rest_seconds": 0.02,
+            "beam_settle_seconds": 0.8,
+        }
+
+        result = run_stability_test(scene, [box], fast)
+
+        assert result["ran"]
+        assert result["shake"]["summary"]["trial_count"] == 1
+        assert result["beam"]["summary"]["trial_count"] == 2
+        assert np.allclose(scene.box_pose(box.index)[0], before, atol=0.005)
+        assert scene.data.eq_active[scene.pallet_weld]
     finally:
         scene.close()
 

@@ -41,7 +41,7 @@ abrir la de los demás.
 |---|---|---|
 | **Visión** | `src/vision/` | Ve el paquete que la fuente presenta (`detect.py`), lo **mide** ya en la mano (`gauge.py`) y **mide la superficie del palé** con tres cámaras de profundidad (`depth.py` renderiza, `surface.py` desproyecta y fusiona, numpy puro) |
 | **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`, adaptador sobre `placing/`) |
-| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión—, mesa auxiliar común y cámaras (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`) |
+| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión—, mesa auxiliar común, cámaras y ensayo físico opcional (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`, `stability.py`) |
 | Medida | `src/measure.py` | El resultado: error, apoyo, vuelo, CoG del palé, margen de estabilidad |
 | Trazabilidad | `src/telemetry.py` | **Única** frontera con la plataforma |
 
@@ -114,6 +114,7 @@ python -m placing                               # la heuristica sola: 15 asserts
 python scripts/palletize.py --no-oracle-heightmap   # el mapa, con camaras
 python scripts/palletize.py --beam-planner      # el beam search, para comparar
 python scripts/palletize.py --naive-planner     # la linea base en rejilla
+python scripts/palletize.py --stability-test    # al final: 15 sacudidas y viga X/Y
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
 python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
@@ -398,6 +399,38 @@ Ya existe una línea base medida en `tools/`: frente a first-fit, el beam search
 50 % a 100 % de pilas estrictamente estables y redujo el descentramiento medio del CoM
 de 142 mm a 81 mm. Cualquier heurística nueva se compara contra esos números.
 
+### El ensayo de estabilidad
+
+`src/cell/stability.py` somete la pila que dejó el robot a las **15 sacudidas de
+transporte** (5 picos × 3 ejes, de 0.05 g a 0.80 g) y después a la **viga estrecha** en X
+y en Y. Restaura la misma referencia antes de cada prueba, así que las 17 son
+comparables entre sí. Las cifras son copia literal de `tools/scenarios/mixed_boxes.yaml`
+y viven en `configs/pallet.yaml: stability_test`: se portan, no se recalibran a ojo.
+
+Lo contrasta, no lo sustituye: `measure.py` ya da un margen de estabilidad **estático**
+(`stability_margin` del SDK, contra el polígono de soporte). Esto es la prueba dinámica.
+
+**El ensayo es opcional; la escena NO.** `--stability-test` decide si el ensayo corre,
+pero tres cosas se compilan en **todos** los runs, con bandera o sin ella:
+
+- el palé gana dos juntas de bisagra acotadas (`pallet_rx`, `pallet_ry`,
+  `range="-0.0001 0.0001"`): pasa de 3 a **5 grados de libertad**;
+- el cuerpo mocap `stability_beam` se monta siempre, aparcado en `z=-1` y con alfa 0;
+- `rebuild()` conserva `qpos`/`qvel` del palé al recompilar, que es un cambio de
+  comportamiento en el bucle de recoger y soltar, no en el ensayo.
+
+**Consecuencia medida**, mismo nivel y semilla, sin la bandera, contra el `dev` anterior
+(nivel 11, semilla 1): los resultados se desplazan **en el cuarto decimal** —`fill_ratio`
+0.3163 → 0.3165, `lowness` +0.0001, `peak_penalty` −0.0001, `void_fill` −0.0001— y los
+errores de colocación, **0.1 mm**. Frente a los 1.9 mm del `drop_clearance` calibrado es
+ruido, y no degrada nada: 4/4 y `score` 1.0 en ambos. Pero está ahí: quien compare un run
+de antes con uno de después verá los decimales moverse, y ésta es la línea que lo explica.
+
+**Los resultados del ensayo NO son columnas.** No hay `kind` de evento para el ensayo ni
+lo necesita: el resumen va dentro de `metrics` del episodio (≈0.5 KB, que es `jsonb` y
+donde sobrar es inocuo) y el detalle de las 17 pruebas a `stability.json` en el
+directorio del run, que no llega a la base.
+
 ## 7. Lo que se porta, y no se reescribe
 
 El robot ya está decidido: **UR10e + OnRobot VGP20**. La ejecución procede del
@@ -408,6 +441,7 @@ verificadas contra el esquema real.
 | Origen | Destino | Qué se conserva |
 |---|---|---|
 | `tools/stable_pallet/simulator.py` | `src/cell/scene.py`, `arm.py`, `render.py` | MJCF, UR10e, IK amortiguada, corrección cartesiana, VGP20 y cámaras |
+| `tools/stable_pallet/simulator.py`, `shake.py` | `src/cell/stability.py` | pila post-paletizado, 15 sacudidas restauradas y viga estrecha X/Y |
 | `tools/stable_pallet/truck.py` | `src/cell/truck.py` | carga, orden de descarga y deriva |
 | `tools/stable_pallet/planner.py` | `src/planner/naive.py::BeamPlanner` | beam search, lookahead y modelo de estabilidad interno |
 | `Guionized-simulation/src/pallet/measure.py` | `src/measure.py` | geometría y `demo()`; el CoG añade `cog_offset_m` |
@@ -458,7 +492,8 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 2. **La medida, sola:** `python -m src.measure`. Sus asserts cubren el CoG con cajas
    fuera de tolerancia y el margen contra el polígono de soporte.
 3. **La celda:** `python tests/test_cell.py`. Compila las tres fuentes, comprueba las
-   cámaras, la banda, el orden del camión, la envolvente de IK y el pesaje de muñeca.
+   cámaras, la banda, el orden del camión, la envolvente de IK, el pesaje de muñeca y
+   que el ensayo físico deja la misma pila que encontró.
 4. **Con visor:** `python scripts/palletize.py --viewer --source table`.
 5. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry --level 21`. Un episodio
    entero a disco; mira el `episodes.jsonl`.
@@ -474,7 +509,8 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
    tarjeta: DEPURACIÓN no puede colapsar las nueve en el experimento legado. Y ningún
    control del panel sin bandera en `scripts/palletize.py` se queda encendido: se
    desactiva y se escribe al lado por qué. Un control inerte cuesta más de depurar que
-   uno que no está.
+   uno que no está. **Ensayo de estabilidad al terminar** sí tiene bandera y va
+   encendida: repite un nivel con ella y deben aparecer las 15 sacudidas y la viga X/Y.
 10. **Contra la base**, después:
 
 ```sql

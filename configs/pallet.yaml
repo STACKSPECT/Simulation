@@ -54,6 +54,26 @@ pallet:
   scale: 1.0
   clearance: 0.040               # holgura entre cajas de la misma capa. Ver cabecera.
 
+# Ensayo físico opcional que se ejecuta DESPUÉS de paletizar y siempre restaura la
+# misma pila antes de cada prueba. Son exactamente las cifras ya medidas y verificadas
+# en `tools/scenarios/mixed_boxes.yaml`: se portan, no se recalibran a ojo. Los cinco
+# picos cubren desde maniobra lenta hasta la frenada longitudinal de EN 12195-1; 30 mm
+# es el desplazamiento máximo que el demostrador usa como umbral de carga retenida.
+stability_test:
+  levels_g: [0.05, 0.15, 0.30, 0.50, 0.80]
+  axes: [x, y, z]
+  duration: 0.50
+  settle_seconds: 1.5
+  hold_seconds: 0.5
+  rest_seconds: 0.35
+  max_shift_m: 0.030
+  # Cresta de 10 cm, primero paralela a X y después a Y. El límite de 8 grados es el
+  # mismo con el que `tools/tests/test_shake.py` discrimina una carga que vuelca.
+  beam_width: 0.10
+  beam_height: 0.05
+  beam_settle_seconds: 2.0
+  max_tilt_deg: 8.0
+
 # Catálogo de paquetes. `dims` COMPLETAS.
 #
 # `cog_offset` es la VERDAD de la simulación —lo que `src/cell/scene.py` monta en el

@@ -44,6 +44,7 @@ class Episode:
     events: list[dict] = field(default_factory=list)
     snapshots: list[Snapshot] = field(default_factory=list)
     plans: list[PlacementPlan] = field(default_factory=list)
+    stability_test: dict | None = None
     failure: str | None = None
     duration_s: float = 0.0
 
