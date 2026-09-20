@@ -90,8 +90,8 @@ def test_views_and_failures_match_the_schema() -> None:
 
 def test_level_ids_encode_the_source() -> None:
     catalogue = levels(CFG)
-    assert len(catalogue) == 11
-    assert len(set(catalogue)) == 11
+    assert len(catalogue) == 13
+    assert len(set(catalogue)) == 13
     assert {level.source for level in catalogue.values()} == set(SOURCES)
     for level in catalogue.values():
         assert level.id // 10 == SOURCE_DECADE[level.source]
