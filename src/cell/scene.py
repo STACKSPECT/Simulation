@@ -688,7 +688,8 @@ def parking_grid(cfg: dict, boxes: list[Box], lane: dict) -> list[tuple[float, f
     black = cfg["black_box"]
     pitch_x, pitch_y = (float(v) for v in black["pitch"])
     columns = max(1, int(black["columns"]))
-    lane_x = float(lane["center"][0]) - float(lane["dims"][0]) / 2 - float(black["gap"])
+    lane_x = (float(lane["center"][0]) - float(lane["dims"][0]) / 2
+              - float(cfg["elevator"]["depth"]) - float(black["gap"]))
     lane_y = float(lane["center"][1])
     slots = []
     for index in range(len(boxes)):
@@ -715,14 +716,27 @@ def _black_box_xml(cfg: dict, boxes: list[Box], lane: dict) -> str:
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     half_x, half_y = (x1 - x0) / 2, (y1 - y0) / 2
 
-    # Cinco caras: las cuatro paredes y el techo. Sin suelo —los bultos se apoyan en el
-    # del mundo— y la boca (+x) abierta, que es por donde salen a la banda.
+    # Cerramiento sin suelo; delante sólo queda el hueco de entrega a la banda.
+    # Una fachada entera abierta dejaba ver los cartones esperando en el suelo.
     panels = [
         (cx - half_x - wall, cy, height / 2, wall, half_y + wall, height / 2),   # fondo
         (cx, cy - half_y - wall, height / 2, half_x, wall, height / 2),          # lateral
         (cx, cy + half_y + wall, height / 2, half_x, wall, height / 2),          # lateral
         (cx, cy, height + wall, half_x + wall, half_y + wall, wall),             # techo
     ]
+    mouth_half = float(lane["dims"][1]) / 2 + 0.02
+    mouth_y = float(lane["center"][1])
+    mouth_bottom = float(lane["height"])
+    mouth_top = mouth_bottom + max(float(box.dims_m[2]) for box in boxes) + 0.05
+    front_x = x1 - wall / 2
+    panels += [
+        (front_x, cy, mouth_bottom / 2, wall / 2, half_y, mouth_bottom / 2),
+        (front_x, cy, (height + mouth_top) / 2, wall / 2, half_y, (height - mouth_top) / 2),
+    ]
+    for low, high in ((y0, mouth_y - mouth_half), (mouth_y + mouth_half, y1)):
+        if high > low:
+            panels.append((front_x, (low + high) / 2, height / 2,
+                           wall / 2, (high - low) / 2, height / 2))
     return "\n".join(
         f'    <geom name="black_box_{index}" type="box" pos="{px:.4f} {py:.4f} {pz:.4f}" '
         f'size="{sx:.4f} {sy:.4f} {sz:.4f}" rgba="{rgba}" contype="0" conaffinity="0"/>'
@@ -746,13 +760,24 @@ def _belt_xml(cfg: dict, simplified: bool, lane: dict | None = None) -> str:
     length, width = belt["dims"]
     top = belt["height"]
     friction = " ".join(str(value) for value in belt["friction"])
-    deck = (
-        f'<geom name="belt" type="box" pos="{x} {y} {top - 0.02:.4f}" '
-        f'size="{length / 2} {width / 2} 0.02" friction="{friction}" '
-        f'conaffinity="{SOLID}" '
+    # DOS tramos, que es como se monta una línea de verdad: uno sale del ascensor y el
+    # otro entrega. Se tocan exactamente en el centro —no hay junta por la que colarse— y
+    # el arrastre no se entera de que son dos, porque `Belt._drive` mira la ALTURA a la
+    # que va el cartón, no sobre qué geometría. Por eso partirla es gratis aquí y por eso
+    # el bulto también cruza a la mesa sin escalón.
+    half = length / 4
+    decks = [
+        (f'{x - half:.4f}', 'segment_a'),
+        (f'{x + half:.4f}', 'segment_b'),
+    ]
+    deck = "\n".join(
+        f'    <geom name="belt_{name}" type="box" pos="{cx} {y} {top - 0.02:.4f}" '
+        f'size="{half:.4f} {width / 2} 0.02" friction="{friction}" '
+        f'conaffinity="{SOLID}" rgba="{{rgba}}"/>'
+        for cx, name in decks
     )
     if simplified:
-        return f'    {deck}rgba="0.14 0.15 0.17 1"/>'
+        return deck.format(rgba="0.14 0.15 0.17 1") + "\n" + _elevator_xml(cfg, belt)
 
     rollers = "\n".join(
         f'    <geom type="cylinder" pos="{value:.4f} {y} {top - 0.055:.4f}" '
@@ -777,16 +802,64 @@ def _belt_xml(cfg: dict, simplified: bool, lane: dict | None = None) -> str:
         f'size="0.004 {width / 2 - 0.02:.4f} 0.0005" material="safety_yellow" '
         'contype="0" conaffinity="0"/>'
     )
-    return f'    {deck}rgba="0 0 0 0"/>\n' + "\n".join(
-        [
-            f'    <geom type="box" pos="{x} {y} {top - 0.02:.4f}" '
-            f'size="{length / 2} {width / 2} 0.019" material="belt" contype="0" conaffinity="0"/>',
-            rollers,
-            sides,
-            legs,
-            marker,
-        ]
+    # La banda visible SÍ va partida y con su hueco: es lo que hace que se lean dos
+    # tramos y no una cinta larga. El hueco es sólo visual —la superficie de arrastre de
+    # arriba es continua—, así que no hay por dónde caerse.
+    seam = 0.012
+    surfaces = "\n".join(
+        f'    <geom type="box" pos="{cx} {y} {top - 0.02:.4f}" '
+        f'size="{half - seam:.4f} {width / 2} 0.019" material="belt" '
+        'contype="0" conaffinity="0"/>'
+        for cx, _ in decks
     )
+    transfer = "\n".join([
+        f'    <geom type="cylinder" pos="{x + dx:.4f} {y} {top - 0.028:.4f}" '
+        f'quat="0.7071 0.7071 0 0" size="0.018 {width / 2 - 0.01:.4f}" material="roller" '
+        'contype="0" conaffinity="0"/>'
+        for dx in (-0.020, 0.020)
+    ])
+    return deck.format(rgba="0 0 0 0") + "\n" + "\n".join(
+        [surfaces, transfer, rollers, sides, legs, marker,
+         _elevator_xml(cfg, belt)]
+    )
+
+
+def _elevator_xml(cfg: dict, lane: dict) -> str:
+    """Plataforma móvil antes de la banda; `Belt` manda su altura y el contacto eleva la caja."""
+    tower = cfg["elevator"]
+    length = float(lane["dims"][0])
+    top = float(tower["lower_height"])
+    depth = float(tower["depth"]) / 2
+    # El mismo ancho evita un cambio lateral de apoyo al cruzar a la cinta.
+    platform_width = float(lane["dims"][1])
+    half_w = platform_width / 2 + float(tower["side"])
+    # El canto de salida toca la banda. Debajo de la plataforma no hay banda fija:
+    # de lo contrario la caja chocaría con ella al subir desde el suelo.
+    x = float(lane["center"][0]) - length / 2 - depth
+    y = float(lane["center"][1])
+    height = float(tower["height"])
+    rgba = " ".join(str(v) for v in tower["rgba"])
+    friction = " ".join(str(value) for value in lane["friction"])
+    trim = 'contype="0" conaffinity="0"'
+    parts = [
+        f'    <body name="elevator" mocap="true" pos="{x:.4f} {y:.4f} {top - 0.012:.4f}">'
+        f'<geom name="elevator_platform" type="box" size="{depth:.4f} {platform_width / 2:.4f} 0.012" '
+        f'material="roller" friction="{friction}" solref="0.004 1" conaffinity="{SOLID}"/></body>',
+        f'    <geom name="elevator_header" type="box" pos="{x:.4f} {y:.4f} {height:.4f}" '
+        f'size="{depth:.4f} {half_w:.4f} 0.05" material="safety_yellow" {trim}/>',
+    ]
+    parts += [
+        f'    <geom type="box" pos="{x + dx:.4f} {y + dy:.4f} {height / 2:.4f}" '
+        f'size="0.025 0.025 {height / 2:.4f}" rgba="{rgba}" {trim}/>'
+        for dx in (-depth + 0.025, depth - 0.025)
+        for dy in (-half_w + 0.025, half_w - 0.025)
+    ]
+    parts += [
+        f'    <geom type="box" pos="{x:.4f} {y + side * half_w:.4f} {height / 2:.4f}" '
+        f'size="0.025 0.02 {height / 2:.4f}" material="roller" {trim}/>'
+        for side in (-1, 1)
+    ]
+    return "\n".join(parts)
 
 
 def _truck_xml(cfg: dict, simplified: bool) -> str:
@@ -1194,6 +1267,7 @@ class PalletScene:
         arm = np.asarray(self.data.qpos[self.arm_qpos]).copy()
         pallet_qpos = np.asarray(self.data.qpos[self.pallet_qpos]).copy()
         pallet_qvel = np.asarray(self.data.qvel[self.pallet_dofs]).copy()
+        mocap_pos, mocap_quat = self.data.mocap_pos.copy(), self.data.mocap_quat.copy()
         poses = {box.index: self.box_pose(box.index) for box in self.boxes}
         pallet_locked = (
             bool(self.data.eq_active[self.pallet_weld]) if self.pallet_weld >= 0 else True
@@ -1207,6 +1281,8 @@ class PalletScene:
         self.data.ctrl[:] = arm
         self.data.qpos[self.pallet_qpos] = pallet_qpos
         self.data.qvel[self.pallet_dofs] = pallet_qvel
+        self.data.mocap_pos[:] = mocap_pos
+        self.data.mocap_quat[:] = mocap_quat
         if self.pallet_weld >= 0:
             self.data.eq_active[self.pallet_weld] = pallet_locked
         for box in self.boxes:

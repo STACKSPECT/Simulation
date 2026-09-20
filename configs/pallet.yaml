@@ -386,6 +386,8 @@ levels:
   # ── LA LÍNEA BASE, PARA QUE HAYA CONTRA QUÉ MEDIR ───────────────────────────
   #
   # `ScorePlanner` con el oráculo de visión y de mapa, semillas 1-6, `--no-telemetry`.
+  # Referencia ANTERIOR al ascensor físico: el tiempo adicional de suministro puede
+  # cambiar la estabilidad de la pila; no es una medición del ciclo nuevo.
   # Éstos son los números que una política tiene que batir; si alguien toca los pesos de
   # `heuristic`, se repiten y se actualizan aquí.
   #

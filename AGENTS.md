@@ -304,6 +304,14 @@ ajusta a ella: son la misma cuenta a propósito, porque si cada uno la hiciera p
 los bultos aparecerían atravesando la pared). Treinta bultos ocupan ahora 3,00 m en vez de
 21. Es además lo que la ficción dice: el sistema no sabe lo que viene.
 
+**La banda tiene dos tramos físicos contiguos y un ascensor antes de la entrada.**
+`Belt` carga cada caja abajo, eleva la plataforma mocap por una rampa suave y sólo
+entonces arranca la cinta. La caja sube por contacto: no se reescribe su pose durante
+el trayecto. El ascensor baja vacío antes de cargar la siguiente y su posición sobrevive
+a `rebuild()`. El plazo de entrega incluye bajada, subida, transporte y reposo; un fallo
+sigue siendo `timeout`. La prueba de transporte en `tests/test_cell.py` comprueba todo
+el recorrido y dos entregas consecutivas, con ambos modos gráficos y ambas fuentes.
+
 Tres cosas de la banda de mesa que no se deducen leyendo el código:
 
 - **Acaba en el canto de la mesa y comparte su cota**, las dos a 0.58. `Belt._riding` mira
@@ -313,9 +321,11 @@ Tres cosas de la banda de mesa que no se deducen leyendo el código:
   que ancla los tres números.
 - **El centro de la banda se DERIVA del canto de la mesa**, no va escrito. Dos números que
   hay que cuadrar a mano acaban descuadrados.
-- **Cuesta tiempo simulado**, que antes no se pagaba: 1.20 m a 0.25 m/s son 4,8 s por
-  bulto. El nivel 11 pasó de 50 a 70,4 s y el guardia de tiempo se rebasó con la cuenta
-  al lado. El 17, con treinta bultos, tarda 275 s de los 600 de `max_duration_s`.
+- **Cuesta tiempo simulado**: el nivel 11 pasó de 70,4 s sólo con banda a 99,0 s con
+  ascensor (semilla 1, `speed=1`). La subida de 0,54 m tarda 2,7 s y la bajada vacía,
+  otros 2,7 s; también se añade recorrido horizontal antes de la cinta. La prueba del
+  ciclo deja 115 s de presupuesto. La fuente del nivel 17 entrega sus treinta paquetes
+  en 424,4 s sin maniobras del brazo: ese tiempo también cuenta en `max_duration_s`.
 
 Además de la fuente, **los doce niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
@@ -393,7 +403,8 @@ rojo ahí es el resultado del experimento, no una configuración rota — **no l
 bajándoles el número de bultos.** Si alguna vez salen verdes sin que nadie los toque, eso
 es la noticia: algo mejoró de verdad.
 
-Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6:
+Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6, **antes
+del ascensor físico**. Su tiempo adicional puede cambiar la estabilidad de la pila:
 
 | nivel | bultos | media colocada | cómo se rompe |
 |---|---|---|---|
