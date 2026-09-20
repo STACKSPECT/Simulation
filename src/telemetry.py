@@ -26,6 +26,10 @@ def run_config(scene) -> dict:
         "pallet_scale": float(pallet["scale"]),
         "source": source,
         "level_name": scene.level.name,
+        # El decorado, para poder separar en la pantalla de ejecuciones dos niveles que
+        # sólo se diferencian en el escenario —el 33 y el 34— sin leerse el nombre.
+        # `runs.config` es `jsonb`: aquí sobrar es inocuo. Ver AGENTS.md §5.
+        "decor": scene.level.decor,
         "robot": "Universal Robots UR10e",
         "eoat": scene.cfg["vacuum"]["name"],
         "catalogue": [

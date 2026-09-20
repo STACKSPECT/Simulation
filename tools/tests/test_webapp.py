@@ -99,7 +99,7 @@ def test_the_catalogue_offers_the_declared_levels() -> None:
     assert [item["key"] for item in catalogue] == [
         "level-11", "level-12", "level-13", "level-14", "level-15", "level-16",
         "level-17", "level-21", "level-22", "level-23", "level-31", "level-32",
-        "level-33",
+        "level-33", "level-34",
     ]
     for entry in catalogue:
         assert entry["title"] and entry["description"]
@@ -292,6 +292,7 @@ LEVELS = (
     ("level-23", "conveyor", 23),
     ("level-31", "truck", 31),
     ("level-33", "truck", 33),
+    ("level-34", "truck", 34),
 )
 
 
