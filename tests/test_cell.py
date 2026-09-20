@@ -14,6 +14,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 os.environ.setdefault("MUJOCO_GL", "egl")
 
+from src import measure  # noqa: E402
 from src.cell import tcp_frame  # noqa: E402
 from src.cell.arm import ArmController  # noqa: E402
 from src.cell.conveyor import Belt, make_supply  # noqa: E402
@@ -457,6 +458,34 @@ def test_level_11_physical_cycle_stays_within_its_time_budget() -> None:
         )
         assert episode.success, episode.failure
         assert episode.duration_s < 115.0, episode.duration_s
+    finally:
+        scene.close()
+
+
+def test_level_11_stack_survives_all_fifteen_jolts() -> None:
+    """La pila que monta el nivel 11 aguanta el ensayo de transporte entero.
+
+    `speed=0.0` no es un detalle: es lo que pone `arm.fast_forward` y lo que hace
+    `scripts/palletize.py` sin visor, que es el camino por defecto. Con `speed=1.0` el
+    brazo recorre los waypoints en vez de teletransportarse, la pila queda distinta y el
+    fallo no aparece; el test pasaría sin vigilar nada.
+    """
+    scene = build_scene(level_id=11, seed=1, simplified=True)
+    try:
+        episode = run_episode(
+            scene,
+            OracleDetector(),
+            OracleGauge(),
+            ScorePlanner(scene.cfg),
+            seed=1,
+            speed=0.0,
+        )
+        assert episode.success, episode.failure
+        # Las mismas cajas que sacude el CLI: las que apoyan en el palé, no todas.
+        physical = measure.on_pallet(scene, episode.final_placements)
+        result = run_stability_test(scene, [placement.box for placement in physical])
+        shake = result["shake"]["summary"]
+        assert shake["held_all"], shake
     finally:
         scene.close()
 
