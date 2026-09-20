@@ -376,8 +376,13 @@ Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6
 
 | nivel | bultos | media colocada | cómo se rompe |
 |---|---|---|---|
-| 16 | 20 | 6,7 | 3/6 se queda sin hueco, 3/6 `ik_unreachable` |
-| 17 | 30 | 6,0 | 3/6 deriva al soltar, 2/6 `ik_unreachable`, 1/6 `stack_collapse` |
+| 16 | 20 | 10,3 | 6/6 se queda sin hueco |
+| 17 | 30 | 13,7 | 3/6 deriva al soltar, 1/6 `stack_collapse`, y **2/6 lo completan** |
+
+Los números son de DESPUÉS de encender el filtro de alcance y el reintento de hueco: antes
+eran 6,7 y 6,0, y la mitad de los fallos eran `ik_unreachable`. Ya no queda ninguno, así
+que lo que miden ahora es lo que se quería medir —la decisión— y no la envolvente del
+brazo.
 
 **Se rompen por motivos distintos y sus números no se suman.** El 16 falla PLANIFICANDO:
 veinte bultos del catálogo entero son el 85 % de la envolvente geométrica —los verdes se
