@@ -1,418 +1,557 @@
 # Simulation
 
-Palletizing in MuJoCo: a conveyor stops, an arm picks a package off it, measures the
-package **in hand**, decides where it goes, and stacks it on a pallet. The physics is
-real and the metrics are measured, not estimated. Everything streams live to the
+[![licence MIT](https://img.shields.io/badge/licence-MIT-1f6feb)](LICENSE)
+[![python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)](#requirements)
+[![MuJoCo 3.13.0](https://img.shields.io/badge/MuJoCo-3.13.0-ff6b00)](#requirements)
+[![numpy 2.4.4](https://img.shields.io/badge/numpy-2.4.4-4d77cf)](#requirements)
+[![robot UR10e](https://img.shields.io/badge/robot-UR10e-0b5394)](#the-cell)
+[![gripper OnRobot VGP20](https://img.shields.io/badge/gripper-OnRobot%20VGP20-0b5394)](#the-cell)
+[![pallet EUR 1200 × 800](https://img.shields.io/badge/pallet-EUR%201200%20%C3%97%20800-8b5a2b)](#the-cell)
+[![sources table · conveyor · truck](https://img.shields.io/badge/sources-table%20%C2%B7%20conveyor%20%C2%B7%20truck-5a5a5a)](#the-cell)
+[![14 levels](https://img.shields.io/badge/levels-14-5a5a5a)](#the-cell)
+[![planner beam search](https://img.shields.io/badge/planner-beam%20search-6f42c1)](#how-a-slot-gets-chosen)
+[![14 score terms](https://img.shields.io/badge/score%20terms-14-6f42c1)](#how-a-slot-gets-chosen)
+[![telemetry live → Supabase](https://img.shields.io/badge/telemetry-live%20%E2%86%92%20Supabase-3ecf8e)](#usage)
+[![Platform branch dev](https://img.shields.io/badge/Platform-branch%20dev-critical)](#requirements)
+[![checks 6 rungs](https://img.shields.io/badge/checks-6%20rung%20ladder-2ea043)](#development)
+[![oracle true](https://img.shields.io/badge/oracle-true%20(perception%20pending)-yellow)](#status)
+
+**Closed-loop palletizing in MuJoCo.** A UR10e with a suction gripper takes packages off a
+table, a conveyor or a truck trailer, weighs each one in the air, decides where it goes and
+stacks it. Nothing is scripted — the arm does not know what the next package is until it is
+holding it. Every run streams live to the
 [Platform](https://github.com/STACKSPECT/Platform) observability project.
 
-> ## ⚠️ Status: skeleton. It does not run yet.
->
-> The contracts are fixed and the architecture document is written. **One Python module
-> is implemented** (`src/contracts.py`) and **one script works** (`scripts/setup.sh`).
-> Every other module is a docstring describing what goes in it, and its functions raise
-> `NotImplementedError`.
->
-> There is no working `palletize.py`, no test suite, no measurement module. The
-> [per-file status table](#per-file-status) below says exactly what exists. Please read
-> it before you try to run anything — the usage section describes the **intended**
-> interface, not a working one.
+<div align="center">
+  <img src="docs/img/simulation-cell.gif" alt="The UR10e emptying a truck trailer at ten times speed: it lifts cardboard boxes one at a time off the trailer deck on the left, swings right and lowers each one onto the empty europallet, building a stack two layers deep while yellow racking uprights stand behind" width="800">
+</div>
+
+```console
+$ python scripts/palletize.py -n 1 --no-telemetry --beam-planner --level 11
+modo: oráculo · BeamPlanner · mapa oráculo · mesa · N1 · un tipo, alineado · 1 episodio(s)
+  std_m-00 std_m      L1 error   2.8 mm  apoyo 100% margen +125.4 mm  ok
+  std_m-01 std_m      L2 error   1.9 mm  apoyo  99% margen  +99.5 mm  ok
+  std_m-02 std_m      L3 error   2.6 mm  apoyo  99% margen  +73.4 mm  ok
+  std_m-03 std_m      L4 error   1.7 mm  apoyo  99% margen  +47.4 mm  ok
+semilla 1: 4/4 · ÉXITO
+```
+
+[The loop](#the-loop) · [Results](#results) · [Placement](#how-a-slot-gets-chosen) ·
+[The cell](#the-cell) · [Control panel](#the-control-panel) · [Usage](#usage) ·
+[Requirements](#requirements) · [Status](#status) · [Development](#development)
 
 ---
 
-## Contents
+Table and conveyor levels feed packages across two adjoining conveyor sections from an
+opaque store. Each package loads onto the elevator near the floor, rises on its moving
+platform through physical contact, and travels along both belts to the pickup station.
+The elevator lowers empty before loading the next package.
 
-- [What this is](#what-this-is)
-- [How it differs from its predecessor](#how-it-differs-from-its-predecessor)
-- [Architecture](#architecture)
-- [Per-file status](#per-file-status)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Development](#development)
-- [Intended usage](#intended-usage)
-- [The closed vocabularies](#the-closed-vocabularies)
-- [Open decisions](#open-decisions)
-- [Dependencies and licences](#dependencies-and-licences)
-- [Licence](#licence)
+## The loop
 
----
+One package, start to finish — also the order the modules are called in. The objects on the
+arrows are the entire shared vocabulary, defined once in `src/contracts.py`.
 
-## What this is
-
-A palletizing cell simulated in MuJoCo, built so that the interesting parts are actually
-decided rather than scripted. The cycle of one package — which is also the order the
-modules are called in:
-
-```
-conveyor advances and STOPS      cell.conveyor.present()
-  -> it is seen                  vision.detect.observe()      -> Observation
-  -> it is picked                cell.arm                     (execution)
-  -> it is measured in hand      vision.gauge.measure()       -> PackageSpec
-  -> a slot is chosen            planner.heuristic.choose()   -> PlacementPlan
-  -> it is placed                cell.arm                     (execution)
-  -> the result is measured      measure.measure_placement()  -> Placement, PalletState
-  -> it is reported              telemetry.RunLogSink         (rows, live)
+```mermaid
+flowchart LR
+    S(["Source presents<br>and STOPS"]) --> P["Perceive<br>vision.detect"]
+    P -- Observation --> K["Pick<br>cell.arm"]
+    K --> W["Weigh in hand<br>vision.gauge"]
+    W -- PackageSpec --> C["Choose the slot<br>planner"]
+    C -- PlacementPlan --> L["Place<br>cell.arm"]
+    L --> M["Measure<br>src.measure"]
+    M -- "Placement · PalletState" --> T["Report, live<br>src.telemetry"]
+    T --> S
 ```
 
-Note the order: **measurement happens AFTER picking and BEFORE planning.** That is not a
-design flourish — it is what forces the planner to be incremental. It cannot precompute
-the whole pallet, because it does not know what the next package looks like until the arm
-is holding it.
+**Measurement happens after picking and before planning.** That is what forces the planner
+to be incremental: it cannot precompute the pallet, because it does not know the next
+package until the arm is holding it.
 
-## How it differs from its predecessor
+## Results
 
-[`STACKSPECT/Guionized-simulation`](https://github.com/STACKSPECT/Guionized-simulation)
-("scripted simulation") did the same job with every box's slot written out in a YAML
-file. It existed to pin down the contract with the platform and walk the whole thing
-end-to-end before the real system existed. **This repository is the real system.** The
-difference is not cosmetic:
+Nine levels — three per source — three seeds each: 27 episodes and 165 packages per
+configuration. Measured here on `dev` at **`c8d84ac`**, the commit this page describes;
+the command that produced them is under the table.
 
-| | scripted (predecessor) | here |
-|---|---|---|
-| where each box goes | written in `configs/pallet.yaml` | decided by a heuristic from what it sees and measures |
-| what is on the conveyor | nothing — boxes wait pre-placed on the table | reported by perception, which can be wrong |
-| package dimensions | read from the catalogue | measured with the package already in hand |
-| run's `oracle` flag | always `true` | **`false`** once no stub is left in the loop |
-| `no_detection` failure | unreachable | reachable |
+| motion interpolated | grid baseline | score heuristic | **beam search** |
+|---|---:|---:|---:|
+| Episodes completed | 14 / 27 | 12 / 27 | **22 / 27** |
+| Packages placed | 91 · 55 % | 92 · 56 % | **140 · 85 %** |
+| Dominant failure | `stack_collapse` ×10 | `stack_collapse` ×10 | `stack_collapse` ×4 |
 
-## Architecture
+The beam search places half again as many packages as either alternative, and the gap is
+almost entirely collapses it does not suffer. **Across all 1510 placements measured the
+stability margin was never negative** — the minimum was +23.1 mm.
 
-Three layers plus two cross-cutting concerns. Each folder is a boundary: you work inside
-one without opening the others.
+<div align="center">
+  <img src="docs/img/arm-modes.png" alt="The panel's speed card: presets from ×0,5 to máximo, and below them a Fast-forward toggle explained as the arm jumping pose to pose while the release, the settle and the jolts are simulated the same" width="360">
+</div>
 
-| Layer | Folder | What it does |
-|---|---|---|
-| **Vision** | `src/vision/` | Sees the package stopped on the conveyor (`detect.py`) and **measures** it once in hand: dimensions, mass, centre of gravity (`gauge.py`) |
-| **Planning** | `src/planner/` | Height map of the pallet (`heightmap.py`) and the **scoring heuristic** that picks the slot (`heuristic.py`) |
-| **Execution** | `src/cell/` | MuJoCo: scene, arm, **conveyor** that starts and stops, cameras |
-| Measurement | `src/measure.py` | The result: error, support, overhang, pallet CoG, stability margin |
-| Traceability | `src/telemetry.py` | The **only** boundary with the platform |
+The arm runs in two modes, and the choice moves the numbers more than the planner does. Under
+**fast-forward** the arm jumps waypoint to waypoint; the release, the settle and the jolts are
+still simulated, so what decides the outcome still happens.
 
-`src/episode.py` stitches them together — it asks, it does not compute. And they all
-speak the same language:
+| beam search | fast-forward | motion interpolated |
+|---|---:|---:|
+| Episodes completed | **26 / 27** | 22 / 27 |
+| Packages placed | **161 · 98 %** | 140 · 85 % |
 
-### The shared language lives in `src/contracts.py`
+Worth reading honestly: under fast-forward the grid baseline nearly ties the beam search,
+160/165 against 161/165. **The planner's advantage only appears once the arm actually executes
+the trajectory** — which is the case for judging a planner on interpolated motion rather than
+on the cheap mode.
 
-**This is the one file all four modules read**, and the only one that has to be agreed
-before anything else is touched. It knows nothing about the platform: the names are the
-domain's, not any column's. Units are SI throughout — metres, kilograms, seconds,
-radians. The single exception in the project is event `payload`s, which go in mm and
-degrees, and that conversion happens at the telemetry boundary and nowhere else.
+<details>
+<summary><b>The four newer table levels, and how to reproduce all of this</b></summary>
 
-| Type | Produced by | Consumed by, and what it carries |
-|---|---|---|
-| `Observation` | `vision/detect.py` | `episode.py` — id, pose on the conveyor, approximate dims, `confidence` |
-| `PackageSpec` | `vision/gauge.py` | `planner`, `telemetry` — `dims_m`, `mass_kg`, `cog_offset_m`, `grasp_width` |
-| `Heightmap` | `planner/heightmap.py` | `planner/heuristic.py` — grid of heights above the pallet deck |
-| `PlacementPlan` | `planner/heuristic.py` | `episode.py` — target pose, `layer`, `slot`, `score`, predicted support |
-| `Placement`, `PalletState` | `measure.py` | `telemetry.py` — what was measured |
+Levels `14`–`17` are not in the table above. They are the harder table bench added after the
+original nine, and **the last two are not expected to go green** — they exist as a bench for a
+learned planner to beat. Over those four levels × three seeds the beam search completes 2/12
+episodes interpolated and 4/12 fast-forward; no planner clears them.
 
-Plus four `Protocol`s — `Detector`, `Gauge`, `Planner`, `Sink` — which are what lets the
-four modules be built in parallel without blocking on each other.
+Level `34` postdates the measurement and is not in any figure here. Being `33` with scenery
+and nothing else changed, it should score exactly what `33` scores.
 
-**The rule that makes that work: each module ships its oracle stub BEFORE its real
-implementation.** The stub reads ground truth straight out of the scene and returns a
-valid contract object. With all four stubs in place the whole loop runs green on day one,
-and swapping one for the real thing is a one-line change in `scripts/palletize.py`. The
-stubs live next to what they replace, clearly named: `vision/oracle.py`,
-`planner/naive.py`.
+Every figure above came from the repository's own entry point, three seeds per level:
 
-A run's `oracle` flag is `any(stub in use)`. Marking it wrong invalidates exactly the
-comparison that justifies the work, because the UI does not compare an oracle run against
-a non-oracle one.
+```bash
+for L in 11 12 13 21 22 23 31 32 33; do
+  python scripts/palletize.py -n 3 --seed 1 --level $L --no-telemetry --speed 1 --beam-planner
+done
+```
 
-## Per-file status
+`--speed 1` interpolates the motion and `--speed 0` is fast-forward; headless, neither is
+paced to the wall clock, so both run as fast as the machine manages. Each invocation writes
+`runs/<timestamp>-pallet/episodes.jsonl` — one line per episode, with the planner's full score
+breakdown. Note that `--naive-planner` marks its run `oracle = true`; the beam search does not.
 
-Verified file by file against the source on this branch, not from memory.
+</details>
 
-**Implemented** means there is working code. **Stub** means the functions or classes are
-declared with the right signature but raise `NotImplementedError`. **Docstring only**
-means the file contains its specification and nothing executable — the work is to port or
-write it.
+## How a slot gets chosen
 
-### Python
+The height map is **measured, never tracked in a counter.** Three depth cameras — overhead
+plus two opposed diagonals — render depth; the points are unprojected into the world,
+everything not facing upwards is discarded, and the rest is rasterised onto the pallet
+footprint and fused by keeping the highest value per cell. A cell no camera saw is marked
+unobserved: zero height is not the same as free deck.
 
-| File | Status | Notes |
-|---|---|---|
-| `src/contracts.py` | ✅ **Implemented** | The only implemented module. 4 dataclasses, 4 `Protocol`s, derived properties (`grasp_width`, `footprint_area`, `Heightmap.top`). Imports and works. |
-| `src/episode.py` | 🟡 Stub | `run_episode()` raises. Skeleton to be ported from the predecessor. |
-| `src/measure.py` | ⬜ Docstring only | No code. To be ported wholesale, with one change: `pallet_state` must accumulate CoG using `cog_offset_m`. |
-| `src/telemetry.py` | ⬜ Docstring only | No code. To be ported; its row functions are the verified contract. |
-| `src/cell/__init__.py` | ⬜ Docstring only | To be ported as-is (`TCP_SITE`, `add_table`, `tcp_frame`, `lookat_quat`). |
-| `src/cell/arm.py` | ⬜ Docstring only | To be ported as-is (`ArmController`, mink IK). |
-| `src/cell/scene.py` | ⬜ Docstring only | To be ported with changes: boxes no longer come from a script. |
-| `src/cell/render.py` | ⬜ Docstring only | To be ported (`render(scene, view)`). |
-| `src/cell/conveyor.py` | 🟡 Stub | `present()` and `release()` raise. **Written from scratch** — no predecessor to port from. |
-| `src/vision/__init__.py` | ⬜ Docstring only | Package marker. |
-| `src/vision/detect.py` | 🟡 Stub | `CameraDetector.observe()` raises. Approach undecided (rendered RGB-D, degraded segmentation buffer, or a trained model). |
-| `src/vision/gauge.py` | 🟡 Stub | `WristGauge.measure()` raises. Approach undecided. |
-| `src/vision/oracle.py` | ⬜ Docstring only | `OracleDetector` / `OracleGauge` sketched in comments; ~10 lines each once `cell/scene.py` exists. |
-| `src/planner/__init__.py` | ⬜ Docstring only | Package marker. |
-| `src/planner/heightmap.py` | 🟡 Stub | `measure()` raises. |
-| `src/planner/heuristic.py` | 🟡 Stub | `ScorePlanner.choose()` raises; `__init__` stores the config. |
-| `src/planner/naive.py` | ⬜ Docstring only | `GridPlanner` sketched in a comment; ~20 lines. |
-| `scripts/palletize.py` | 🟡 Stub | `main()` raises. This is the entry point and the only place that picks stub vs. real. |
-| `tests/test_pallet.py` | ⬜ Docstring only | **No tests exist.** The file lists what to port and what to add. |
+**The beam search is the planner that represents this system.** It searches several placements
+deep instead of committing to the best next one, and it is what the numbers above were
+measured with — against first-fit it produces 100 % strictly-stable stacks to first-fit's 50 %,
+and pulls mean centre-of-mass off-centring from 142 mm down to 81 mm. It is selected with
+**`--beam-planner`** and **is not yet the CLI default**: `scripts/palletize.py` still
+constructs `ScorePlanner` when no planner flag is given. Read the startup line, not your
+memory of which flags you typed.
 
-### Everything else
+<div align="center">
+  <img src="docs/img/pallet-layers.png" alt="A europallet two layers deep: the lower layer of green trays laid one way, the upper layer turned across it so the seams do not line up, and the arm lowering a cardboard box into the remaining gap" width="750">
+</div>
 
-| File | Status | Notes |
-|---|---|---|
-| `scripts/setup.sh` | ✅ **Implemented** | Works end to end: venv, deps, editable SDK from Platform with an assertion that it is the `dev` branch, and clones `mujoco_menagerie`. The only executable path in the repo. |
-| `requirements.txt` | ✅ Complete | All pinned to `==`, reconciled with the predecessor's verified set. |
-| `.env.example` | ✅ Complete | The three Supabase variables, with the warning about `SERVICE_KEY`. |
-| `configs/scene.yaml` | 🟡 Keys only | Parses as valid YAML; **every value is blank**, including `robot.model`. |
-| `configs/pallet.yaml` | 🟡 Keys only | Parses; values blank, `packages` commented out as an example. The header documents what to port and re-measure. |
-| `AGENTS.md` | ✅ Complete | 19 KB, Spanish. The project's real knowledge. |
+The alternative is the scoring heuristic, which is what runs by default today. With the
+package in hand, `placing/` enumerates every discrete pose that fits, hard-filters the
+infeasible ones, and scores the rest over **fourteen terms**:
+
+```
+support_ratio  com_margin  lowness    void_fill   levelness  peak_penalty  lateral_proximity
+edge_flush     seam_break  overhang   pallet_com  reachability  bridge      gap_waste
+```
+
+The score is a number in `[0, 1]` and the chosen slot is the maximum. The breakdown rides with
+the `plan` event, so *"why did it put that box there?"* is answerable without re-running the
+episode. **To change its behaviour you change the weights** in
+`configs/pallet.yaml: heuristic.weights` — a weight of 0 switches its term off — not the code.
+The third option, `--naive-planner`, is a grid baseline that exists only as a yardstick, and it
+marks its run as an oracle.
+
+When nothing scores at all, that is not an exception: it is a `wrong_placement`, with the
+reason in the `fail` event.
+
+`placing/` is vendored and **must not be edited.** Its boundary is an executable assert, not a
+convention: `python -m placing` runs fifteen checks and the first asserts that no heavy module
+leaked into `sys.modules` — which is what lets the weights be tuned in milliseconds instead of
+minutes of physics.
+
+### Training the score weights without the robot
+
+`scripts/train_weights.py` tunes those fourteen weights with direct policy search. It does not
+compile or move the UR10e, run a source, or simulate the suction cycle: each package is placed at
+the pose selected by `ScorePlanner`, MuJoCo settles the free box, and the resulting load runs the
+same 15 transport jolts and two narrow-beam trials as a cell episode. The default is deliberately
+small:
+
+```bash
+python scripts/train_weights.py --levels 16 --seeds 1 --iterations 3 --population 4
+```
+
+The optimiser is the cross-entropy method (CEM), a dependency-free episodic policy search. Its
+loss is `missing * (stability_trials + 1) + fallen_boxes`: leaving a package off the pallet is
+therefore always worse than placing that package and seeing it fail every restored stability
+trial. `fallen_boxes` counts box/trial failures, so the same package falling in two independently
+restored trials counts twice.
+
+Every run is auditable under `runs/<timestamp>-weight-training/`:
+
+- `manifest.json` records the scenarios, optimiser seed, Git state, objective and protocol;
+- `config_snapshot.json` and its SHA-256 pin the exact effective configuration;
+- `source_snapshot/` and per-file SHA-256 hashes preserve the exact policy code, including
+  uncommitted work;
+- `progress.jsonl` is flushed after every placement, stability trial and evaluation;
+- `evaluations/*.json` keeps every chosen pose, score breakdown and full stability result;
+- `best_weights.json` and `summary.json` contain the final recommendation.
+
+This is an oracle decision benchmark, not a claim about end-to-end cell performance. Promising
+weights still need the normal robot episodes because this loop intentionally removes perception,
+IK, reachability error and gripper collisions.
+
+## The cell
+
+Each folder is a boundary — you work inside one without opening the others.
+
+```mermaid
+flowchart LR
+    PAN["tools/<br>control panel"] -. "JSON on a pipe" .-> EP
+    EP["<b>src/episode.py</b><br>the director:<br>asks, does not compute"]
+    EP --> CEL
+    EP --> VIS
+    EP --> PLN
+    EP --> MEA
+
+    subgraph CEL["src/cell · MuJoCo"]
+        direction TB
+        ARM["scene.py · arm.py"]
+        SUP["table · conveyor · truck"]
+        AUX["auxiliary table<br>shared, empty"]
+    end
+    subgraph VIS["src/vision"]
+        direction TB
+        DET["detect.py<br><i>NOT IMPLEMENTED</i>"]
+        GAU["gauge.py · wrist scale"]
+        DEP["depth.py + surface.py"]
+    end
+    subgraph PLN["src/planner"]
+        direction TB
+        HM["heightmap.py"]
+        HEU["heuristic.py · naive.py"]
+    end
+
+    HEU --> PLC["<b>placing/</b><br>vendored · NumPy only<br>knows no simulator"]
+    MEA["src/measure.py"] --> TEL["<b>src/telemetry.py</b><br>the ONLY boundary"]
+    TEL --> PLT[("Platform<br>Supabase")]
+```
+
+<div align="center">
+  <img src="docs/img/vgp20-suction.png" alt="Close-up of the OnRobot VGP20: a flat black tool plate carrying an array of teal suction cups, gripping a cardboard box from above with no jaws touching its sides" width="420">
+</div>
+
+**UR10e on a pedestal, OnRobot VGP20 with 16 Ø40 mm cups.** 1300 mm reach, 12.5 kg payload;
+the tool weighs 2.55 kg, so the package ceiling is 8.5 kg. The pallet is a real europallet,
+1.20 × 0.80 m, at scale 1. Every calibrated number sits beside its measurement in
+[`configs/scene.yaml`](configs/scene.yaml) and [`configs/pallet.yaml`](configs/pallet.yaml) —
+if you change one, write down how you measured it.
+
+Three sources, one contract (`Supply.present()` / `release()`), fourteen levels. The tens
+digit is the source, so the platform can tell a table N2 from a truck N2 with the single
+integer it stores per episode:
+
+| | N1 | N2 | N3 | N4 | N5 | N6 | N7 |
+|---|---|---|---|---|---|---|---|
+| **Table** — staged, nothing moves | `11` one type, aligned | `12` mixed, rotated | `13` random, adversarial CoG | `14` the known mix, a fuller pallet | `15` wider catalogue, five new shapes | `16` the whole catalogue, 20 cartons | `17` small parcels, 30 cartons |
+| **Conveyor** — stops on *measured* rest | `21` one type, centred | `22` mixed, off-centre | `23` random, variable spacing | | | | |
+| **Truck** — whole load, highest box only | `31` ordered columns | `32` the loader's disorder | `33` random, adversarial CoG | `34` the same load, inside an industrial plant | | | |
+
+`16` and `17` are **red on purpose** — they are the step the current heuristic does not
+reach, and they exist to measure how far short it falls. Do not "fix" them by lowering
+their carton count. See `AGENTS.md` §6.
+
+Level `34` is `33` with `decor: plant` and nothing else changed — same eight cartons, same
+draw, same adversarial CoG, same loader disorder — so running both on one seed isolates what
+the scenery costs. It should cost nothing: the plant is non-colliding backdrop, and the two
+episodes come out identical to the last decimal. What it does change is the light, which has
+its own measured table in `configs/pallet.yaml`. See `src/cell/plant.py`.
+
+<div align="center">
+  <img src="docs/img/truck-bay.png" alt="The cell as a workplace: a trailer backed into the bay on the left with its doors open and its wooden floor showing, the UR10e on its pedestal reaching over a part-built pallet of cartons with the vacuum gripper, a blue work table beside it, two teal process tanks behind, and orange bay markings painted on the floor" width="900">
+</div>
+
+That is level `34` — the truck as somewhere a robot actually stands, rather than a source in a
+diagram.
+
+Each type carries a `cog_offset_m`: the centre of mass is *not* the geometric centre.
+`vision/gauge.py` estimates it from one plumb wrist reading — the horizontal components come
+out exact, the vertical is anchored to the geometric centre because nothing downstream reads
+it — and `--precise-com` sweeps several poses when that is not enough. The method and its five
+preconditions are in **[`pesaje-en-el-sitio.md`](pesaje-en-el-sitio.md)**.
+
+<div align="center">
+  <img src="docs/img/cell-overview.png" alt="The full cell from behind the robot: the UR10e on its pedestal holding a box in the suction gripper, the open truck trailer with staged boxes to the left, an empty europallet to the right, yellow racking uprights around it" width="900">
+</div>
+
+## The control panel
+
+`tools/` ships a browser panel for driving experiments — stdlib only, no framework, no
+bundler, nothing fetched at start-up. It talks to the cell over JSON on a pipe; nothing in
+`webapp.py` touches MuJoCo.
+
+```bash
+cd tools && uv sync --extra dev --extra video
+uv run stable-pallet dashboard          # prints: Panel en http://127.0.0.1:8000/
+```
+
+<div align="center">
+  <img src="docs/img/control-panel.png" alt="The run control panel: an experiment picker on the left listing the levels by source with playback transport and a log pane below, and mode, speed, centre-of-mass and start-up cards on the right under a DEPURACIÓN · SIN TELEMETRÍA badge" width="900">
+</div>
+
+> The capture above predates levels `14`–`17` and `34`, so its header still reads
+> *9 niveles* and its cards are ungrouped. The picker reads the catalogue straight from
+> `configs/pallet.yaml` and shows fourteen today, grouped by source.
+
+<details>
+<summary><b>What each control does</b></summary>
+
+| Control | What it does |
+|---|---|
+| **Experiment picker** | The fourteen levels, read straight from `configs/pallet.yaml`, grouped by source. Add a level to the YAML and the card appears |
+| **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused |
+| **Speed / fast-forward** | ×0,5 to *máx*, changeable mid-run; the toggle switches the two arm modes measured [above](#results) |
+| **Playback** | Pause, scrub, step either way, play backwards. The run waits where it was and continues from there |
+| **Start-up** | 3D window, weigh each box, simplified graphics, hold the viewer open, seed override |
+
+</details>
+
+<div align="center">
+  <img src="docs/img/com-real-vs-computed.png" alt="Close-up of the panel's centres-of-mass card: a green Reales toggle labelled the ones MuJoCo integrates, and an amber Calculados toggle labelled the ones the robot uses, where the yellow line is the error" width="620">
+</div>
+
+That toggle is the project in miniature: **reales** are what MuJoCo integrates, **calculados**
+what the robot derived from the wrist, and the yellow line between them is the error — a bad
+weighing made visible before it becomes a collapse.
+
+The panel is not the entry point and cannot become one: only `scripts/palletize.py` chooses
+real components against oracle stubs, so only it can compute a run's `oracle` flag.
+
+## Usage
+
+`scripts/palletize.py` is the cell entry point. Weight training has its own
+`scripts/train_weights.py` entry point described above.
+
+| Flag | Effect |
+|---|---|
+| `-n N`, `--seed N` | Episode count and starting seed |
+| `--source table\|conveyor\|truck` | First level of that source |
+| `--level N` | One specific level from the table above |
+| `--beam-planner` | **The beam search** — the planner the [results](#results) were measured with |
+| `--naive-planner` | The grid baseline. Marks the run `oracle = true` |
+| `--speed F` | `0` = fast-forward; any positive value interpolates the motion |
+| `--viewer` | Open the 3D window (one episode only) |
+| `--no-telemetry` | Disk only. **Otherwise it uploads by default** |
+| `--no-oracle-gauge` | Weigh on the wrist for real |
+| `--no-oracle-heightmap` | Build the map from the three cameras |
+| `--precise-com` | Sweep several wrist poses instead of one plumb reading |
+| `--video`, `--show-com`, `--simplified-graphics` | Timelapse, final CoG in the report, cheap visuals |
+| `--protocol json` | Line protocol — how the panel drives it |
+
+The startup line always names the planner and where the height map came from: two runs being
+compared have to be told apart by reading the output, not by remembering which flags were
+typed.
+
+**Disk is the source of truth and Supabase is a replica.** Each run writes
+`runs/<timestamp>-pallet/episodes.jsonl` — one line per episode with its metrics and the
+planner's full score breakdown — plus top and side PNGs per layer under `<seed>/`. A network
+failure warns once, switches uploading off, and lets the episode finish.
 
 ## Requirements
 
-- **Python 3.11+** (developed and verified on 3.12).
-- **Linux or macOS.** `scripts/setup.sh` is bash and assumes `python3` and `git` on PATH.
-- **`git`**, to clone the arm model at install time.
-- **A checkout of [`STACKSPECT/Platform`](https://github.com/STACKSPECT/Platform)** — see
-  below. This is a hard requirement, not an optional integration.
-- **A GPU is not required**, but rendering the pallet views needs a working OpenGL
-  context.
+Python **3.11+** on Linux or macOS, an OpenGL context (no GPU needed — headless runs use EGL
+automatically), [`uv`](https://docs.astral.sh/uv/) for `tools/`, and
+[`STACKSPECT/Platform`](https://github.com/STACKSPECT/Platform) checked out on branch **`dev`**
+— a hard requirement, see below.
 
-### The hard cross-repo dependency
+<details>
+<summary><b>Dependencies and their licences</b></summary>
 
-**This repository does not stand alone.** The `theker_telemetry` SDK is deliberately not
-vendored here: it is the contract of what the platform stores, and whoever stores the
-data defines its shape. So:
+Pinned to `==` in [`requirements.txt`](requirements.txt); every licence below was read from the
+installed package metadata.
 
-> You need the `Platform` repository checked out **as a sibling directory**, on its
-> **`dev` branch**, installed **editable**. Without it, nothing imports.
+| Package | Version | Licence | Used for |
+|---|---|---|---|
+| `mujoco` | 3.13.0 | Apache-2.0 | Physics, rendering, the viewer |
+| `numpy` | 2.4.4 | BSD-3-Clause | Everywhere. The only thing `placing/` imports |
+| `PyYAML` | 6.0.3 | MIT | `configs/` |
+| `imageio` | 2.37.3 | BSD-2-Clause | The pallet PNGs and the timelapse |
+| `theker_telemetry` | editable | see Platform | The platform contract. **Not** in `requirements.txt`, on purpose |
 
-```
-parent-directory/
-├── Simulation/      <- this repo
-└── Platform/        <- required sibling, on branch `dev`
-```
+The control panel is packaged separately in [`tools/pyproject.toml`](tools/pyproject.toml) with
+its own `uv.lock` — `mujoco`, `numpy`, `PyYAML`, plus `pytest`, `ruff` and `imageio-ffmpeg`
+behind extras; someone who only runs episodes installs none of it. Model attribution (UR10e
+kinematics and meshes from
+[MuJoCo Menagerie](https://github.com/google-deepmind/mujoco_menagerie), BSD-3-Clause) is in
+**[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)** — the meshes download at install time
+and are never committed.
 
-It has to be `dev`. `main` does not have `pallet.py` — the source of `stability_margin`
-and `support_polygon` — and does not have the episode lifecycle (`RunLog.begin` /
-`end` / `snapshot`). **That failure does not appear at install time, it appears at run
-time**, which is why `scripts/setup.sh` asserts on it and stops.
+> [!WARNING]
+> **`requirements.txt` has drifted.** `mink`, `qpsolvers`, `daqp` and `scipy` are still pinned,
+> but nothing in `src/`, `placing/`, `scripts/` or `tests/` imports any of them — the IK is now
+> the damped least-squares solver in `src/cell/arm.py`. Worth cleaning up: `qpsolvers` is
+> LGPL-3.0, the only non-permissive entry.
 
-If your clone is somewhere else, pass `PLATFORM=/path/to/Platform`.
+</details>
 
-## Installation
+<details>
+<summary><b>Installation, and why Platform has to be the <code>dev</code> branch</b></summary>
 
 ```bash
 git clone https://github.com/STACKSPECT/Simulation
 git clone -b dev https://github.com/STACKSPECT/Platform      # the required sibling
 
-cd Simulation
-bash scripts/setup.sh
-source .venv/bin/activate
+cd Simulation && bash scripts/setup.sh && source .venv/bin/activate
 ```
 
-`scripts/setup.sh` does four things, and it is the one path in this repo that is known to
-work today:
+`scripts/setup.sh` creates `.venv`, installs `requirements.txt`, installs the SDK editable from
+`$PLATFORM/backend` (default `../Platform`), asserts it is `dev`, and clones `mujoco_menagerie`
+into `third_party/` (git-ignored, never vendored). On success it prints `SDK ok: ciclo de vida
+y geometría disponibles`. Point it elsewhere with `PLATFORM=/path/to/Platform`.
 
-1. Creates `.venv` and installs `requirements.txt`.
-2. Installs `theker_telemetry` editable from `$PLATFORM/backend` (default `../Platform`).
-3. Asserts the SDK exposes `RunLog.begin`, `end` and `snapshot`, plus `stability_margin`
-   and `support_polygon` — i.e. that you are on Platform's `dev`. It exits if not.
-4. Clones `mujoco_menagerie` into `third_party/` (ignored by git, never vendored).
+The `theker_telemetry` SDK is deliberately not vendored here: it is the contract of what the
+platform stores, and whoever stores the data defines its shape. Platform's `main` ships only
+`core.py` and `schema.py` — `pallet.py`, the source of `stability_margin` and
+`support_polygon`, is on `dev`, and so is the live episode lifecycle (`RunLog.begin` / `end` /
+`snapshot`). **That failure does not appear at install time, it appears at run time**, which is
+why `setup.sh` asserts on it and stops.
 
-On success it prints `SDK ok: ciclo de vida y geometría disponibles`.
+For credentials, copy `.env.example` to `.env` here or in the parent directory.
+`SUPABASE_SERVICE_KEY` bypasses RLS and is the only one that writes — Python side only. **With
+a `.env` present, telemetry is on by default**, and every run prints which mode it is in. The
+SDK treats "no credentials" as normal and writes to disk silently, so that printed line is the
+only thing between you and a run you thought was uploading.
 
-**This installs the environment. It does not give you a runnable simulation** — see the
-status table.
+</details>
 
-### Credentials
+## Status
 
-Copy `.env.example` to `.env`, in this repo or its parent directory:
+The loop runs end to end on all three sources today. What does not:
 
-```
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_KEY=
-```
+| Piece | State | Detail |
+|---|---|---|
+| Cell, arm, vacuum, three sources | ✅ | `tests/test_cell.py`, 17 physical checks |
+| Wrist gauge | ✅ | Mass and planar CoM recovered |
+| Beam search planner | ✅ | The planner the [results](#results) were measured with. Opt-in behind `--beam-planner` |
+| Scoring heuristic | ✅ | What the CLI still constructs when no planner flag is given. 15 checks, no simulator |
+| Weight trainer | ✅ | Robot-free CEM policy search; physical box settling and all 17 stability trials, with durable JSON/JSONL traces |
+| Measurement + live telemetry | ✅ | Rows verified against the schema |
+| Control panel | ✅ | Both modes, fourteen levels |
+| Height map from cameras | 🟡 | Runs, not at parity: level 11 seed 1 places 3/4 against the oracle's 4/4, ending in `wrong_placement`. Hence `allow_unobserved: true` — coverage over an empty pallet measures 93.3 %, not the 98 % that would justify `false` |
+| Table levels `16`–`17` | 🟡 | Deliberately out of reach: no planner clears them, and they exist as a bench for a learned one |
+| **Perception** (`vision/detect.py`) | ❌ | The **only** `NotImplementedError` in the repo |
+| Reachability filter | ❌ | Off — the reach figures in `placing/` are a Panda's, so the planner can pick a slot the arm cannot reach (`ik_unreachable`) |
 
-`SUPABASE_SERVICE_KEY` bypasses RLS and is the only one that can write — **Python side
-only, never in a frontend.** Without these variables the SDK does not complain: it treats
-"no credentials" as its normal mode and writes to disk only. That is precisely why the
-entry point is required to always print which mode it is running in.
+> [!IMPORTANT]
+> **Every run is still flagged `oracle = true`.** The flag is `any(stub in use)`, and with
+> `CameraDetector.observe()` unimplemented no combination of flags clears it —
+> `--no-oracle-vision` raises `NotImplementedError: percepción sin implementar`. The gauge, the
+> height map and the planner can each be switched to the real thing, but the flag stays `true`
+> until perception lands.
 
 ## Development
 
-See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full workflow. In short:
+Read **[`AGENTS.md`](AGENTS.md)** in full before writing any code — it is in Spanish, it is
+where the project's real knowledge lives, and every hard rule in it cost a lost run in the
+predecessor repository. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers branches, commits and the
+language rule (code and comments Spanish, outward-facing docs English). Work lands on `dev`:
+branch from it, target it.
 
-- **`dev` is the integration branch.** Branch from it, open pull requests against it.
-  `main` is synced from `dev`.
-- Conventional commits (`feat:`, `fix:`, `docs:`, `refactor(scope):`, `chore:`), subject
-  lines in Spanish.
-- **Documentation is English; code, comments and configs are Spanish.** Do not translate
-  the Spanish comments — they carry measured values and their reasoning.
-- There is no CI. The verification ladder in `AGENTS.md` §9 takes its place, ordered
-  cheapest-first. None of its six rungs can be run today.
-- **The tests use no framework on purpose** — plain asserts run as a script
-  (`python tests/test_pallet.py`), not pytest. Do not add one.
+<details>
+<summary><b>The verification ladder</b></summary>
 
-**Read [AGENTS.md](AGENTS.md) in full before writing code.** It is in Spanish and it is
-where the project's real knowledge lives: the closed vocabularies, the hard rules, and
-the traps that each cost a lost run in the predecessor repo.
+Cheapest first on purpose. Run it in this order and stop at the first failure. The counts
+below are what these printed on `c8d84ac`; level `34` and its tests landed after that, so
+expect them to have moved up.
 
-## Intended usage
-
-> **None of this works yet.** `scripts/palletize.py` raises `NotImplementedError`, and
-> `tests/test_pallet.py` and `src/measure.py` contain no code. This section documents the
-> interface the skeleton is being built towards, so that the design is reviewable — not
-> commands you can run today.
-
-```bash
-python scripts/palletize.py --viewer            # watch it
-python scripts/palletize.py -n 3                # 3 episodes; UPLOADS by default
-python scripts/palletize.py -n 3 --no-telemetry # no upload, disk only
-python tests/test_pallet.py                     # checks, no simulator, no network
-python -m src.measure                           # the measurement, with its asserts
-```
-
-Plus three flags that select stub versus real implementation, which is the only place
-that choice is made — and therefore the only place that can compute the run's `oracle`
-flag:
-
-```python
-detector = OracleDetector() if args.oracle_vision else CameraDetector()
-gauge    = OracleGauge()    if args.oracle_gauge  else WristGauge()
-planner  = GridPlanner(cfg) if args.naive_planner else ScorePlanner(cfg)
-oracle   = any([args.oracle_vision, args.oracle_gauge, args.naive_planner])
-```
-
-Three behaviours the entry point is required to have, each of which cost a lost run
-before:
-
-- **It prints which telemetry mode it is in.** A misplaced `.env` swallows uploads
-  silently, and there is no other way to find out.
-- **An open episode is always closed**, in a `finally`. A Ctrl-C leaves the row in
-  `running` forever, and the Live screen picks the first episode in that state *without
-  ordering* — one orphan pins it there indefinitely.
-- **It passes `config=run_config(scene)`** including `pallet_size_m`. Without it the UI
-  assumes a 1200×800 europallet and every dimension comes out wrong by the scale factor.
-
-## The closed vocabularies
-
-Three vocabularies from the platform contract are closed. Inventing a value **does not
-raise an error where you write it** — it fails later and silently, and usually takes the
-rest of the run's uploads with it. They are repeated here because this is the kind of
-thing a README should warn about; the full reasoning is in `AGENTS.md` §5.
-
-| | Allowed values |
-|---|---|
-| `events.kind` | `perceive`, `plan`, `pick`, `place`, `settle`, `fail` |
-| `snapshots.view` | `top`, `side`, `iso`, `camera` |
-| `failure` | `no_detection`, `ik_unreachable`, `collision`, `grasp_slip`, `wrong_placement`, `timeout`, `stack_collapse`, `overhang_violation` |
-
-- **There is no event kind for the conveyor.** It is a closed CHECK of six values and
-  none is its. Conveyor state rides in the `perceive` payload, where extra keys are
-  harmless, or it does not travel. Invent a kind and the database rejects the row with a
-  400 the SDK swallows — **uploads stay off for the rest of the run**.
-- **A wrong view name fails after the upload.** The PNG lands in Storage and *then* the
-  row is rejected with a `23514`: orphaned photo, trace with no image. The previous repo
-  hit this with `front`.
-- **A wrong failure cause raises `ValueError`** from `EpisodeResult`, deliberately.
-  Adding one means changes in three places in Platform — ask the backend owner.
-- A conveyor jam is **`timeout`**, not a new cause. If the station stays empty and the
-  wait expires, that is `timeout`; if it delivers but perception sees nothing, that is
-  `no_detection`.
-
-And `task` must be `"palletizing"`, which the SDK validates too.
-
-## Open decisions
-
-### ⚠️ The robot arm has not been chosen — and this blocks the project
-
-`configs/scene.yaml` has `robot.model` **blank**. It is meant to point at a `scene.xml`
-inside `third_party/mujoco_menagerie/<arm>/`, and changing arms is changing that one
-path — *and re-measuring everything else*.
-
-**Every calibration figure the project inherited is a Franka Panda measurement.** They
-come from the predecessor's `configs/pallet.yaml` header, which is a lab notebook, and
-they are all properties of the Panda's gripper, not of this project:
-
-| Value | Panda measurement | Why it is not portable |
-|---|---|---|
-| `cartesian_speed` | 0.0625 m/s | A quarter of nominal. Above it the box slips in the gripper and lands 15–20 mm off. It is the segment's acceleration, not the mass (tested 0.03–0.13 kg, same slip). |
-| clearance between boxes | 23 mm | On the gripper's **closing axis**. Imposed by the finger — 10.5 mm thick plus what it opens on release — not by the box. Also the pallet's occupancy ceiling (72–76 %). |
-| `drop_clearance` | 8 mm | The bottom of a measured curve: 20 mm → 5.1 mm error, 8 mm → 1.9 mm, 2 mm → 3.9 mm. |
-| `release_margin` | 3 mm per side | The gripper does not open fully to release; it opens fully up high and away from the stack. |
-
-Also arm-dependent and blank in `configs/scene.yaml`: `tcp_offset`,
-`gripper_max_opening`, `gripper_actuator`, `observe_qpos`, and the IK convergence
-tolerances — which must sit **above** the servo's measured steady-state droop under load,
-or `move_to` never converges and everything gets reported as `ik_unreachable`.
-
-**These get re-measured, not copied.** The measurement procedure is in the predecessor's
-`configs/pallet.yaml` header, along with the IK reach sweep that has to be repeated.
-
-### Undecided, but not blocking
-
-- **The perception approach** (`src/vision/detect.py`): rendered RGB-D with classical
-  segmentation, a segmentation buffer degraded with noise, or a trained model.
-- **The gauging approach** (`src/vision/gauge.py`): a dedicated measuring station the arm
-  carries the package to, or in-flight measurement from the robot's own sensors. Also
-  which quantities are genuinely measured versus assumed — mass could come from wrist
-  torque or from the delivery note; both are defensible, not knowing which is not.
-
-## Dependencies and licences
-
-Audited with `pip-licenses` in a clean virtual environment built from `requirements.txt`,
-not assumed.
-
-### Direct dependencies
-
-| Package | Version | Licence | Why it is here |
+| | Command | Proves | Result |
 |---|---|---|---|
-| [mujoco](https://github.com/google-deepmind/mujoco) | 3.13.0 | Apache-2.0 | The physics. |
-| [mink](https://github.com/kevinzakka/mink) | 1.3.0 | Apache-2.0 | Cartesian IK for the arm. |
-| [qpsolvers](https://github.com/qpsolvers/qpsolvers) | 4.13.0 | **LGPL-3.0** | mink solves IK through it and ships no solver of its own. See the note below. |
-| [daqp](https://github.com/darnstrom/daqp) | 0.9.1 | MIT | The QP backend qpsolvers actually calls. |
-| [numpy](https://numpy.org) | 2.4.4 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | Everywhere. |
-| [scipy](https://scipy.org/) | 1.18.1 | BSD-3-Clause | Geometry for the measurement module. |
-| [PyYAML](https://pyyaml.org/) | 6.0.3 | MIT | Reads `configs/`. |
-| [imageio](https://github.com/imageio/imageio) | 2.37.3 | BSD-2-Clause | Writes the pallet PNGs. |
+| 0 | `python -m placing` | The heuristic alone; first check is the import boundary | `15 checks passed` |
+| 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `30 comprobaciones pasadas` |
+| 2 | `python -m src.measure` | CoG with out-of-tolerance boxes, margin against the support polygon | `ok measure.demo` |
+| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `18 comprobaciones físicas pasadas` |
+| 4 | `python scripts/palletize.py -n 1 --no-telemetry --level 21` | A whole episode to disk | `4/4 · ÉXITO` |
+| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `208 passed` in 41 s |
 
-Pinned to `==` and reconciled against the set `Guionized-simulation` had already verified
-works together. Where the two repos disagreed, the predecessor's proven version wins.
+> Rung 5 was red on `c8d84ac`: two `tools/tests/test_webapp.py` assertions still demanded a
+> nine-level catalogue while `configs/pallet.yaml` had grown past it. The level `34` commit
+> fixed both — the count now derives from `_catalogue()` instead of being written out.
 
-### Transitive dependencies
+Then with telemetry on: the run must print that it is active, the episode must appear *in
+progress* in the UI within seconds, and the pallet must build package by package. The SQL
+checks are in `AGENTS.md` §9.
 
-All permissive: `absl-py` (Apache-2.0), `etils` (Apache-2.0), `glfw` (MIT), `pillow`
-(MIT-CMU), `PyOpenGL` (BSD), `fsspec` (BSD-3-Clause), `typing_extensions` (PSF-2.0),
-`zipp` (MIT).
+`tests/test_pallet.py`, `tests/test_cell.py`, `python -m placing` and `python -m src.measure`
+are plain asserts run as scripts. Do not add pytest, a `conftest.py` or fixtures to them — the
+point is that they run in seconds with nothing installed beyond the dependencies, and that
+anyone can read the file top to bottom. `tools/` is the exception: separately packaged, and it
+does use pytest.
 
-### On `qpsolvers` and the LGPL
+</details>
 
-**`qpsolvers` is the only copyleft-licensed dependency in the tree** (LGPL-3.0). Stating
-it explicitly rather than staying quiet about it:
+<details>
+<summary><b>The three closed vocabularies — the easiest thing to break</b></summary>
 
-It is used **as a library, imported at runtime from a virtual environment, and no part of
-it is redistributed inside this repository**. The LGPL's copyleft attaches to the library
-and to derivative works of it, not to software that merely uses it across that boundary;
-users remain free to replace their installed copy. **It therefore does not force a
-licence change here**, and this project's MIT licence stands.
+Closed CHECKs in the database. Inventing a value does not raise an error where you write it: it
+fails later, silently, and usually takes the rest of the run's uploads with it. All three are
+anchored by `tests/test_pallet.py`.
 
-Two conditions that come with that, worth knowing before anyone changes the packaging:
-
-- If this project is ever **redistributed as a bundle that vendors or statically embeds**
-  `qpsolvers` (a frozen binary, a container image shipped as a product, a wheel that
-  includes it), the LGPL's relinking and notice obligations apply to that bundle.
-- Modifying `qpsolvers` itself means releasing those modifications under the LGPL.
-
-Neither applies to the repository as it stands.
-
-### Not installed from `requirements.txt`
-
-| Component | Source | Licence |
+| Vocabulary | Allowed values | What an invented value does |
 |---|---|---|
-| **`theker_telemetry`** | [`STACKSPECT/Platform`](https://github.com/STACKSPECT/Platform), branch `dev`, installed editable by `scripts/setup.sh`. Deliberately not in `requirements.txt`: it is the contract of whoever stores the data. | Same project, same organisation. |
-| **[`mujoco_menagerie`](https://github.com/google-deepmind/mujoco_menagerie)** | Cloned into `third_party/` by `scripts/setup.sh` at install time. Listed in `.gitignore` — **nothing from it is redistributed here.** | The repository as a whole is **Apache-2.0**, © 2022 DeepMind Technologies Limited. **Individual model directories carry their own terms** (Apache-2.0, BSD-3-Clause or MIT, depending on the model) — consult the `LICENSE` file inside the model subdirectory you end up selecting for `robot.model`. Credit: MuJoCo Menagerie, Google DeepMind. |
+| `events.kind` | `perceive` `plan` `pick` `place` `settle` `fail` | Rejected with a 400 the SDK swallows, and uploads stay off for the rest of the run. There is deliberately **no kind for any source** — their state rides in the `perceive` payload |
+| `snapshots.view` | `top` `side` `iso` `camera` | The PNG uploads to Storage and *then* the row is rejected with a `23514`: an orphaned photo and a trace with no image |
+| `failure` | `no_detection` `ik_unreachable` `collision` `grasp_slip` `wrong_placement` `timeout` `stack_collapse` `overhang_violation` | `EpisodeResult` raises `ValueError`, on purpose. Adding one means touching three places in Platform — ask the backend owner |
+
+The asymmetry worth memorising: **inside an event `payload` extra keys are harmless and missing
+keys break silently; at the row level extra keys are lethal**, because
+`event` / `placement` / `pallet_state` / `snapshot` take `**kwargs` and every key is a column.
+Columns are SI; payloads are mm and degrees, converted at the telemetry boundary and nowhere
+else. `task` is the level's **source** — `table`, `conveyor` or `truck` — taken from
+`scene.level.source`, never hard-coded; the UI shows it translated (mesa, cinta, camión).
+
+Rows are written **live** — `begin()` opens the episode, the row functions drop rows as things
+are measured, `end()` closes it with a PATCH — which is the only reason the Live screen is
+live. An open episode is closed **always**, including on Ctrl-C: one orphan left in `running`
+pins that screen indefinitely.
+
+</details>
+
+<details>
+<summary><b>Boundaries that are not negotiable</b></summary>
+
+- **Platform knowledge lives only in `src/telemetry.py`.** What crosses module boundaries are
+  `contracts.py` objects, never rows.
+- **Do not reimplement `stability_margin` or `support_polygon`.** They come from the SDK; a
+  third copy would drift from the one the UI draws.
+- **Do not let a module read the scene on its own.** If `heuristic.py` imports `mujoco`,
+  something went wrong. The oracle stubs are the deliberate exception, which is why they live
+  in separate, clearly named files.
+- **Do not put anything inside `placing/`**, not even a convenience import.
+- **Do not eyeball `configs/`.** Every odd value has its measurement beside it.
+
+</details>
+
+<details>
+<summary><b>How it differs from its predecessor</b></summary>
+
+[`Guionized-simulation`](https://github.com/STACKSPECT/Guionized-simulation) did the same job
+with every box's slot written out in YAML. It existed to pin down the platform contract before
+the real system existed. **This repository is the real system.**
+
+| | scripted | here |
+|---|---|---|
+| where each box goes | written in `configs/pallet.yaml` | searched and chosen from what is measured |
+| what the source delivers | nothing — boxes wait pre-placed | a table, a physical conveyor, or a loaded trailer |
+| dimensions and mass | read from the catalogue | measured with the package in hand |
+| pallet surface | assumed | fused from three depth cameras |
+| `no_detection` | unreachable | reachable, once perception exists |
+
+</details>
 
 ## Licence
 
-[MIT](LICENSE) © 2026 STACKSPECT.
-
-The dependency audit above found no licence incompatible with releasing this project
-under MIT.
+[MIT](LICENSE) © 2026 STACKSPECT. The dependency audit above found no licence incompatible with
+releasing under MIT.

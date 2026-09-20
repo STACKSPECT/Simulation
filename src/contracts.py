@@ -80,16 +80,30 @@ class Heightmap:
     Se MIDE del estado de la escena en cada pasada; no es un contador que el
     planificador va actualizando. A la tercera caja torcida, un contador deja de
     coincidir con la realidad y ya no se recupera.
+
+    `observed` es lo que aporta medirlo con cámaras en vez de leerlo de la escena: una
+    celda que ninguna cámara vio guarda altura 0, que es indistinguible de cubierta
+    libre. No lo son, y el planificador las trata distinto. `None` significa "no se
+    midió, dalo todo por observado", que es lo que corresponde cuando el mapa sale de la
+    verdad de la escena.
     """
 
-    cells: np.ndarray               # (ny, nx), metros sobre la cubierta
-    origin: tuple[float, float]     # esquina (-x, -y) del palé, en el mundo
-    cell_size: float                # lado de la celda, en metros
+    cells: np.ndarray                    # (ny, nx), metros sobre la cubierta
+    origin: tuple[float, float]          # esquina (-x, -y) del palé, en el mundo
+    cell_size: float                     # lado de la celda, en metros
+    observed: np.ndarray | None = None   # (ny, nx) bool, o None si no se midió
 
     @property
     def top(self) -> float:
         """Altura del punto más alto del montón."""
         return float(self.cells.max()) if self.cells.size else 0.0
+
+    @property
+    def observed_ratio(self) -> float:
+        """Fracción de celdas que alguna cámara vio. 1.0 si no se midió."""
+        if self.observed is None:
+            return 1.0
+        return float(self.observed.mean()) if self.observed.size else 1.0
 
 
 @dataclass(frozen=True)
@@ -155,7 +169,16 @@ class Sink(Protocol):
 
     Existe por la pantalla Live: la plataforma quiere las filas según se producen, no un
     volcado al final. Lo que pasa por aquí son objetos de dominio, no filas.
+
+    `begin`/`end` abren y cierran el episodio, y van aquí porque el entrypoint los llama:
+    un sink que sólo implementara los cuatro de abajo lo rompería. Lo que devuelve `end`
+    es el resumen del episodio, sin tipar a propósito: tiparlo metería el nombre de una
+    clase de la plataforma en este fichero, que es justo lo que `telemetry.py` evita.
     """
+
+    def begin(self, seed: int) -> None: ...
+
+    def end(self, episode) -> object: ...
 
     def placement(self, index: int, placement) -> None: ...
 

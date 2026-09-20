@@ -1,0 +1,44 @@
+# El demostrador, empaquetado aparte del repo que lo aloja.
+#
+# Tiene su propio `pyproject.toml` y no entra en el `requirements.txt` de la raíz a
+# propósito: es una herramienta de `tools/`, no parte de la celda. Quien solo quiera
+# correr episodios no necesita instalar nada de aquí, y quien quiera tocar el
+# planificador no tiene que cargar con pytest en el entorno de la simulación.
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stable-pallet"
+version = "0.1.0"
+description = "Demostrador de paletizado estable: planificador, celda y panel de control"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = { text = "MIT" }
+dependencies = [
+  "mujoco>=3.3,<4",
+  "numpy>=2.0,<3",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+video = ["imageio>=2.37,<3", "imageio-ffmpeg>=0.6,<1"]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+
+[project.scripts]
+stable-pallet = "stable_pallet.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["stable_pallet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

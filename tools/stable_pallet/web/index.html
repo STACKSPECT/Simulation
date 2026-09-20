@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STACKSPECT · Panel de ejecución</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/icon.png" type="image/png">
+<!-- Same rule as the platform: the saved choice wins, then the system theme. Runs before
+     the first paint so the page never flashes the wrong one. -->
+<script>
+  try {
+    var saved = localStorage.getItem("theme");
+    var dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch (e) {
+    document.documentElement.dataset.theme = "light";
+  }
+</script>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="i-start" viewBox="0 0 24 24"><path d="M7 5v14M19 5 9 12l10 7z"/></symbol>
+  <symbol id="i-rewind" viewBox="0 0 24 24"><path d="M12 5 3 12l9 7zM21 5l-9 7 9 7z"/></symbol>
+  <symbol id="i-prev" viewBox="0 0 24 24"><path d="M15 5 7 12l8 7z"/></symbol>
+  <symbol id="i-next" viewBox="0 0 24 24"><path d="M9 5l8 7-8 7z"/></symbol>
+  <symbol id="i-forward" viewBox="0 0 24 24"><path d="M3 5l9 7-9 7zM12 5l9 7-9 7z"/></symbol>
+  <symbol id="i-end" viewBox="0 0 24 24"><path d="M17 5v14M5 5l10 7L5 19z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" role="img" aria-label="STACKSPECT"><span class="mark"></span><span class="word"></span></span>
+    <div class="brand-text">
+      <h1>Panel de ejecución</h1>
+      <p>Paletizado en lazo cerrado · UR10e · MuJoCo</p>
+    </div>
+  </div>
+  <div class="live">
+    <span class="mode-badge" id="mode-badge">EJECUCIÓN</span>
+    <span class="status" id="status">Listo</span>
+    <span class="link" id="link" title="Conexión con el servidor"></span>
+    <button type="button" class="icon-btn" id="theme-toggle" aria-label="Cambiar de tema">
+      <svg class="i-sun" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1"/></svg>
+      <svg class="i-moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 9.6A5.6 5.6 0 0 1 6.4 2.8a5.6 5.6 0 1 0 6.8 6.8Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main>
+
+  <section class="panel span-experiments">
+    <header class="panel-head">
+      <h2>Experimento</h2>
+      <div class="head-tools">
+        <span class="counter" id="experiment-count"></span>
+        <div class="segmented view-switch" id="views">
+          <button type="button" data-view="grid" title="Cuadrícula" aria-label="Cuadrícula"><svg><use href="#i-grid"/></svg></button>
+          <button type="button" data-view="list" title="Lista" aria-label="Lista"><svg><use href="#i-list"/></svg></button>
+        </div>
+      </div>
+    </header>
+    <div class="cards" id="experiments"></div>
+  </section>
+
+  <div class="column">
+   <div class="settings">
+
+    <section class="panel">
+      <header class="panel-head"><h2>Modo</h2></header>
+      <div class="segmented mode-switch" id="modes">
+        <button type="button" data-mode="execution" class="on">Ejecución de verdad</button>
+        <button type="button" data-mode="debug">Depuración</button>
+      </div>
+      <p class="hint" id="mode-note">Lanza scripts/palletize.py y publica telemetría si hay credenciales.</p>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head"><h2>Velocidad</h2></header>
+      <div class="segmented" id="speeds"></div>
+      <p class="hint">El mismo movimiento, más rápido o más lento contra el reloj.</p>
+      <label class="switch" id="ff-row">
+        <input type="checkbox" id="fast-forward">
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b>Fast-forward</b>
+          <small>El brazo salta de pose a pose. La suelta, el asentamiento y las
+          sacudidas se simulan igual.</small>
+        </span>
+      </label>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head"><h2>Centros de masa</h2></header>
+      <label class="switch">
+        <input type="checkbox" id="show-true" checked>
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b><i class="chip chip-true"></i>Reales</b>
+          <small>Los que integra MuJoCo.</small>
+        </span>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="show-estimated" checked>
+        <span class="track"><span class="knob"></span></span>
+        <span class="switch-text">
+          <b><i class="chip chip-est"></i>Calculados</b>
+          <small>Los que usa el robot. La línea amarilla es el error.</small>
+        </span>
+      </label>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head"><h2>Arranque</h2></header>
+      <div class="checks">
+        <label class="check"><input type="checkbox" id="viewer" checked><span>Abrir la ventana 3D</span></label>
+        <label class="check"><input type="checkbox" id="measure-com" checked disabled><span>Pesar cada caja en la muñeca</span></label>
+        <label class="check"><input type="checkbox" id="simplified"><span>Gráficos simplificados</span></label>
+        <label class="check"><input type="checkbox" id="stability-test"><span>Ensayo de estabilidad al terminar</span></label>
+        <label class="check"><input type="checkbox" id="hold" checked disabled><span>Dejar el visor abierto al acabar</span></label>
+      </div>
+      <p class="hint">Las dos apagadas no tienen a qué llamar. <b>Pesar cada caja</b> es la
+      casilla del issue #25: sus banderas no hacen hoy lo que prometen, así que cablearla
+      sería peor que dejarla quieta. <b>Dejar el visor abierto</b> no tiene bandera en
+      <code>scripts/palletize.py</code>.</p>
+      <div class="seed">
+        <label for="seed">Semilla</label>
+        <input type="number" id="seed" placeholder="la del experimento">
+      </div>
+    </section>
+
+   </div>
+
+    <div class="actions">
+      <button class="btn btn-run" id="run">
+        <svg><use href="#i-play"/></svg><span>Ejecutar</span>
+      </button>
+      <button class="btn btn-stop" id="stop" disabled>
+        <svg><use href="#i-stop"/></svg><span>Detener</span>
+      </button>
+    </div>
+
+  </div>
+
+  <section class="panel span-transport" id="transport">
+    <header class="panel-head">
+      <h2>Reproducción</h2>
+      <span class="counter" id="frame-readout">sin grabación</span>
+    </header>
+
+    <div class="timeline">
+      <input type="range" id="scrub" min="0" max="0" value="0" disabled>
+      <div class="ticks"><span id="tick-start">0,0 s</span><span id="tick-end">0,0 s</span></div>
+    </div>
+
+    <div class="transport-row">
+      <button class="tbtn" data-act="start" title="Ir al principio" disabled><svg><use href="#i-start"/></svg></button>
+      <button class="tbtn" data-act="backward" title="Reproducir hacia atrás" disabled><svg><use href="#i-rewind"/></svg></button>
+      <button class="tbtn" data-act="prev" title="Un fotograma atrás" disabled><svg><use href="#i-prev"/></svg></button>
+      <button class="tbtn tbtn-wide" id="pause" title="Pausar la ejecución" disabled><svg><use href="#i-pause"/></svg><span>Pausa</span></button>
+      <button class="tbtn" data-act="next" title="Un fotograma adelante" disabled><svg><use href="#i-next"/></svg></button>
+      <button class="tbtn" data-act="forward" title="Reproducir hacia delante" disabled><svg><use href="#i-forward"/></svg></button>
+      <button class="tbtn" data-act="end" title="Ir al final" disabled><svg><use href="#i-end"/></svg></button>
+    </div>
+
+    <p class="hint">Apagada: los dos modos lanzan <code>scripts/palletize.py --protocol
+    json</code>, que sólo informa (<code>log</code> y <code>finished</code>) y no manda
+    fotogramas. Sin grabación no hay nada que rebobinar ni que pausar. Vuelve a servir el
+    día que el entrypoint emita <code>state</code>.</p>
+  </section>
+
+  <section class="panel span-log">
+    <header class="panel-head">
+      <h2>Registro</h2>
+      <span class="counter" id="run-title"></span>
+    </header>
+    <div class="log" id="log"><p class="empty">Elige un experimento y pulsa Ejecutar.</p></div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

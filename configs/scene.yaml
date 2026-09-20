@@ -1,60 +1,361 @@
 # La celda: brazo, mesa, cinta y parámetros de movimiento. Unidades SI.
 #
 # Esto describe el BANCO DE TRABAJO, no la tarea. Lo que se hace encima —el palé, el
-# catálogo de paquetes y los pesos de la heurística— está en `pallet.yaml`, que además
-# pisa algunos valores de `motion` porque la carga de paletizado obliga a ir más despacio.
+# catálogo de paquetes, los niveles y los pesos del planificador— está en `pallet.yaml`,
+# que además pisa algunos valores de `motion` porque la carga de paletizado obliga a ir
+# más despacio.
 #
-# PORTAR los bloques `robot`, `table` y `motion` desde
-# `~/HackSpain/paletizado-guionizado/configs/scene.yaml`. Están comprobados contra el
-# alcance real del brazo: se resolvió IK sobre una rejilla del área de trabajo a las
-# alturas de agarre, depósito y tránsito y no quedó ninguna pose fuera.
+# ── EL ROBOT YA ESTÁ DECIDIDO ─────────────────────────────────────────────────
+# Universal Robots UR10e sobre pedestal, con un OnRobot VGP20 de 16 ventosas Ø40 mm.
+# Alcance 1300 mm, carga útil 12,5 kg; el VGP20 pesa 2,55 kg, así que el tope de caja
+# son 8,5 kg y quedan 1,45 kg de margen.
 #
-# ── EL ROBOT ESTÁ SIN DECIDIR ─────────────────────────────────────────────────
-# `robot.model` apunta a un `scene.xml` del Menagerie y cambiar de brazo es cambiar esa
-# ruta... y volver a medir TODO lo demás. `tcp_offset`, `gripper_max_opening`,
-# `observe_qpos` y las tolerancias de convergencia son del hardware, no del proyecto.
-# La cabecera de `pallet.yaml` dice qué hay que remedir y cómo se midió la primera vez.
+# `robot.model` apunta al directorio del Menagerie del que salen las MALLAS y las cifras
+# de cinemática e inercias. La cadena cinemática se monta en `src/cell/scene.py` y no se
+# hace `<include>` del `scene.xml` del Menagerie: ese fichero trae su propio suelo, su
+# luz y su cámara, y aquí la celda es una nave con palé, valla y remolque. Lo que se
+# reutiliza son los números, que son los que importan, y las veinte mallas OBJ.
 
 robot:
-  model:                          # third_party/mujoco_menagerie/<brazo>/scene.xml
-  ik_frame: tcp                   # site que añade src/cell/scene.py, en el TCP
-  tcp_offset:                     # del frame de la mano a las almohadillas
-  gripper_actuator:               # índice en data.ctrl
-  gripper_max_opening:            # nada más ancho se puede agarrar
-  observe_qpos:                   # pose de observación, SOLO para la foto final
+  model: third_party/mujoco_menagerie/universal_robots_ur10e
+  base_pos: [0.60, -0.72, 0.48]   # sobre el pedestal; ver `pedestal`
+  base_quat: [0, 0, 0, -1]        # mirando al palé
+  ik_frame: tcp                   # site que añade src/cell/scene.py, en la cara de las ventosas
+  tcp_offset: 0.092               # de la brida de la herramienta a las almohadillas (VGP20)
+  # Pose de observación y de reposo. Es también la que se usa para la foto final, y la
+  # única vez en todo el episodio que el brazo se mueve en espacio de juntas.
+  #
+  # MEDIDA, no elegida: barriendo `shoulder_pan` y `shoulder_lift` y mirando dónde cae
+  # el TCP, la pose de reposo "natural" (pan -90) lo deja 68 mm DENTRO de la huella del
+  # palé, que es justo la trampa que documenta AGENTS.md §5: el brazo se queda donde
+  # estaba soltando y la cenital sale del dorso de la mano. Con pan +60 el TCP queda a
+  # 0,743 m del borde del palé y por detrás de la trasera del remolque (x 0,557 > 0,20),
+  # así que está despejado de las tres fuentes a la vez.
+  #
+  #   pan    lift   TCP                      sobre el palé   margen
+  #   -90   -120    (0.426, -0.332, 1.371)        SÍ         -0.068
+  #   -60   -100    (0.146, -0.281, 1.196)        SÍ         -0.119
+  #   -30   -100    (-0.013, -0.567, 1.196)       no         +0.167
+  #     0   -100    (-0.007, -0.894, 1.196)       no         +0.494  (dentro del remolque)
+  #    30   -120    (0.351, -1.065, 1.371)        no         +0.665
+  #    60   -120    (0.557, -1.143, 1.371)        no         +0.743  <- elegida
+  #    90    -80    (0.774, -1.474, 0.956)        no         +1.074  (dentro del remolque)
+  # Semilla de IK con la herramienta vertical. Separarla de `observe_qpos` es
+  # obligatorio: la pose apartada deja el TCP inclinado y, usada como única semilla,
+  # no converge ni en la estación ni sobre el centro del palé.
+  ik_seed_qpos: [-1.5708, -1.5708, 1.5708, -1.5708, -1.5708, 0.0]
+  observe_qpos: [1.0472, -2.0944, 1.5708, -1.5708, -1.5708, 0.0]
+  payload_kg: 12.5                # nominal del UR10e, caja + herramienta
+  joints: [shoulder_pan_joint, shoulder_lift_joint, elbow_joint,
+           wrist_1_joint, wrist_2_joint, wrist_3_joint]
+
+pedestal:
+  center: [0.60, -0.72]
+  radius: 0.24
+  height: 0.48                    # z de la brida de la base del brazo
+
+# La herramienta. Sustituye al bloque `gripper_*` de una pinza paralela: con ventosa no
+# hay apertura que fijar, hay ventosas que cubrir.
+#
+# La rejilla abarca los 264 × 184 mm del cuerpo entero, así que centrarla sobre una caja
+# más pequeña deja las ventosas exteriores fuera del cartón. `src/cell/arm.py` escoge el
+# mayor bloque contiguo que cabe y desplaza el brazo para centrar ESE bloque —no el
+# cuerpo— sobre la caja.
+vacuum:
+  name: OnRobot VGP20
+  columns: 4
+  rows: 4
+  pitch_x: 0.0747                 # 264 mm de cuerpo entre 4 columnas, con borde
+  pitch_y: 0.048
+  cup_radius: 0.020               # ventosas Ø40 mm
+  cup_force_newtons: 50.0         # por ventosa, catálogo
+  derating: 0.70                  # margen sobre el catálogo: cartón poroso y precinto
+  safety_factor: 1.5
+  body_dims: [0.264, 0.184, 0.092]  # COMPLETAS (largo, ancho, brida a ventosa)
+  mass: 2.55
+  # Hueco entre la cara de la ventosa y la tapa del cartón al sellar. Por debajo de esto
+  # el contacto empuja la caja antes de que haya vacío; por encima, el sello no agarra.
+  cup_gap: 0.0015
 
 table:
-  center:
-  size:                           # SEMIEJES (lo que quiere MuJoCo)
-  height:                         # z de la superficie
-  friction:
-  rgba:
+  # APARTADA DEL PALÉ, y ése es el motivo del número. En [-0.20, -0.66] la mesa ocupaba
+  # x[-0.56, 0.16] y[-1.00, -0.32] y el palé empieza en x=0.00, y=-0.40: se pisaban en un
+  # rectángulo de 0.16 x 0.08 m sobre la esquina de la cubierta. Eso no se ve como un
+  # choque, se ve como que el brazo se empotra: el planificador puntúa esa esquina como
+  # el mejor hueco —baja, pegada al canto, apoyo 100 %— y la caja va contra la mesa. Se
+  # quedaba a 135 mm del destino y el episodio moría en `ik_unreachable`.
+  #
+  # En [-0.20, -0.80] la mesa acaba en y=-0.46 y deja 60 mm de aire hasta el palé. La
+  # estación queda a 0.80 m del pedestal, dentro de la envolvente medida (ver el barrido
+  # de alcance en `configs/pallet.yaml`). Sólo afecta a los niveles de mesa: cinta y
+  # camión tienen su propia fuente y no coexisten con ella en la escena.
+  center: [-0.20, -0.80]
+  size: [0.36, 0.34, 0.29]        # SEMIEJES (lo que quiere MuJoCo)
+  height: 0.58                    # z de la superficie
+  friction: [0.9, 0.01, 0.001]
+  rgba: [0.30, 0.33, 0.37, 1]
 
-# La cinta. No existe en el repo guionizado: esto se diseña de cero.
+# Mesa auxiliar común a todos los niveles. No es una fuente: empieza vacía y queda
+# disponible para que el robot aparte un bulto si una estrategia futura lo necesita.
 #
-# `station` es donde el paquete se PARA para que el brazo lo coja, y tiene que estar
-# dentro del alcance comprobado del brazo. Si la mueves, repite el barrido de IK.
+# ── 100 mm DE AIRE AL PALÉ, NO 50, Y ÉSE ES EL MOTIVO DEL NÚMERO ──────────────
+# Estaba en [1.50, -0.05]: huella x[1.25, 1.75], y[-0.38, 0.28], o sea a 50 mm del
+# canto +X del palé (x=1.20). Y no es una valla baja: su cara superior está en z=0.58,
+# que son 436 mm POR ENCIMA de la cubierta (z=0.144). Una pared de 44 cm a 50 mm del
+# borde donde el planificador MÁS quiere colocar —los huecos de canto puntúan bien:
+# bajos, apoyo 100 %—, con la herramienta bajando pegada a ella.
+#
+# Eso no se ve como un choque, se ve como que la caja sale despedida. Nivel 33,
+# semilla 1, con interpolación real (`--speed 1`, que es lo que corren el visor y el
+# panel): las tres primeras entran con 1.6, 3.0 y 3.9 mm de error y la cuarta se mide
+# a 1674 mm con apoyo 0 % — `stack_collapse`. En fast-forward (`--speed 0`) NO pasa,
+# porque el brazo teletransporta entre waypoints y nunca recorre el tramo que roza; de
+# ahí que el nivel estuviera verde 8/8 y aun así se cayera en cuanto se miraba. Es la
+# trampa de la escalera de comprobación de AGENTS.md §9: se corre en fast-forward.
+#
+# En [1.55, -0.30] quedan 100 mm y el episodio sale 8/8 a `--speed 1`, con la cuarta
+# caja en 4.8 mm en vez de 1674. Duplicar el hueco basta. Comprobado también en los
+# niveles 11 y 21, que son las otras dos fuentes.
+#
+# ── EL LÍMITE NO ES EL ALCANCE, ES EL WAYPOINT DE APROXIMACIÓN ────────────────
+# Apartarla más, o llevarla al otro lado del palé, NO se puede, y conviene dejar
+# escrito por qué para que nadie lo vuelva a intentar. La mesa sólo es útil si el brazo
+# resuelve DOS poses sobre su centro con la herramienta girada 90 grados: la de suelta
+# del bulto más alto del generador (z=0.8835) y el waypoint de aproximación
+# `place_clearance` por encima (z=1.0635). Es lo que exige
+# `test_ik_reaches_the_pick_and_pallet_envelope`, y la segunda es mucho más restrictiva
+# que la primera — un barrido que sólo mire la cota de suelta da falsos buenos.
+#
+#   centro          dist   hueco   suelta  aprox.
+#   (1.50, -0.05)  1.122    50 mm    sí      sí     <- donde estaba
+#   (1.55, -0.30)  1.039   100 mm    sí      sí     <- elegido
+#   (1.50, -0.45)  0.940    50 mm    sí      sí
+#   (1.60, -0.05)  1.204   150 mm    sí      NO
+#   (1.45, -0.80)  0.854    70 mm    sí      NO
+#   (1.35, -0.95)  0.784   220 mm    sí      NO
+#   (1.20, -1.00)  0.662   270 mm    sí      NO
+#   (1.30, -1.10)  0.796   370 mm    NO      NO
+#   (0.90, -1.30)  0.653   570 mm    sí      NO
+#   (1.70, -0.05)  1.288   150 mm    NO      NO
+#   (-0.55,-0.05)  1.331      —      NO      NO     el lado del camión
+#   (0.60, +0.80)  1.520      —      NO      NO     detrás del palé, lo más cerca
+#   (0.60, +0.95)  1.670      —      NO      NO     detrás del palé
+#   (0.60, -1.55)  0.830   820 mm    NO      NO     detrás del robot
+#
+# Fíjate en que la distancia NO ordena la tabla: (0.90, -1.30) está a 0.653 m y no
+# resuelve la aproximación, y (1.55, -0.30) a 1.039 m sí. Lo que se agota en la banda
+# -Y no es el alcance —sobra de largo— sino la rama del codo con la muñeca girada 90
+# grados. Un barrido que mida sólo distancia a la base da falsos buenos. Y el de detrás
+# del robot tenía además otro problema: en (0.60, -1.55) la mesa se mete entre la
+# cámara `side` —(0.60, -2.30, 0.80)— y el palé, y lo oculta ENTERO. `side` es una de
+# las dos vistas que suben foto por capa.
+#
+# ── LA HUELLA ES 0.50 x 0.66 m, PERO NO TODA ESTÁ AL ALCANCE ──────────────────
+# Barrido de IK sobre una rejilla 9x9 de la huella, con la herramienta girada 90
+# grados, a las dos cotas. El sitio nuevo mejora el viejo en las dos:
+#
+#                    9x9 a z=0.8835   9x9 a z=1.0635
+#   (1.50, -0.05)        58/81            41/81
+#   (1.55, -0.30)        68/81            54/81
+#
+# Aun así, lo verificado y lo único que hay que usar es EL CENTRO. Si alguna estrategia
+# futura quiere depositar fuera de él, tiene que repetir este barrido antes.
+#
+# El centro no se queda en el IK: `tests/test_cell.py` sella un bulto y lo deja
+# reposando ahí de verdad (`test_robot_can_leave_a_package_on_the_auxiliary_table`).
+auxiliary_table:
+  center: [1.55, -0.30]
+  size: [0.25, 0.33, 0.04]        # SEMIEJES; huella x[1.30, 1.80], y[-0.63, 0.03]
+  height: 0.58                    # la misma cota que la mesa de recogida (arriba), a
+                                  # propósito: una sola altura de suelta reaprovecha su
+                                  # barrido de alcance. No se midió por separado.
+  friction: [0.9, 0.01, 0.001]
+  rgba: [0.20, 0.38, 0.48, 1]
+
+# ── LA CAJA NEGRA, Y LA CINTA QUE SALE DE ELLA ───────────────────────────────
+#
+# De aquí salen los bultos en los niveles de mesa (1x) y de cinta (2x). Es OPACA a
+# propósito: el sistema no sabe lo que viene, y lo que había antes decía justo lo
+# contrario —los que esperaban se aparcaban en fila, `x = -3 - i*0.7`, o sea 21 m de
+# cartones perdiéndose en el horizonte con treinta bultos—.
+#
+# Se dimensiona SOLA con la carga del nivel: la rejilla de espera se calcula en
+# `src/cell/scene.py::parking_grid` y el cerramiento se ajusta a ella, así que un nivel
+# de cuatro bultos tiene una caseta pequeña y uno de treinta, un almacén. El `pitch` sale
+# del mayor del catálogo (0.55 x 0.36) más cinco centímetros de aire: los que esperan no
+# se tocan entre sí, que es lo que los mantiene quietos.
+black_box:
+  pitch: [0.60, 0.42]            # rejilla de espera, [x, y]
+  columns: 5                     # a lo ancho; las filas salen de cuántos bultos haya
+  margin: 0.15                   # aire entre la rejilla y la pared
+  wall: 0.05
+  height: 1.25
+  gap: 0.10                      # separación de la rejilla respecto al ascensor
+  rgba: [0.07, 0.08, 0.09, 1]
+
+# Ascensor físico antes de la banda: carga abajo y eleva por contacto, sin mover la caja
+# a mano. 0.80 m de fondo cubre la huella máxima girada en X:
+# 0.55*cos30 + 0.40*sin30 = 0.676 m. El ancho es el de la banda: ensanchar sólo el
+# ascensor a 0.70 m cambiaba el apoyo lateral al transferir y dejaba 1.2 mm de vuelo
+# en el segundo paquete del nivel 23, semilla 1. Con ancho continuo, todos apoyan.
+# Subir 0.54 m a 0.30 m/s de pico tarda 2.70 s con la rampa suave; bajar vacío, lo mismo.
+elevator:
+  depth: 0.80                    # COMPLETA, en X; desemboca sin hueco en la banda
+  side: 0.06                     # aire lateral entre plataforma y bastidor
+  height: 1.85                   # altura del bastidor
+  lower_height: 0.04             # cota de carga, sobre el suelo
+  speed: 0.30                    # pico de velocidad vertical, m/s
+  rgba: [0.20, 0.22, 0.26, 1]
+
+# La banda de los niveles de MESA. Misma cota que la mesa —0.58— para que el bulto pase
+# de una a otra sin escalón: `Belt._riding` mira la altura, así que sigue arrastrando ya
+# sobre la mesa y por eso puede dejarlo en su centro. Acaba justo en el canto de la mesa.
+#
+# Va en su propio bloque y no reutiliza `conveyor` porque son dos carriles distintos: el
+# de la cinta entrega al brazo y éste entrega a la mesa, y comparten todo menos dónde
+# acaban.
+feeder:
+  dims: [1.20, 0.44]             # [largo, ancho] COMPLETAS
+  height: 0.58
+  speed: 0.25
+  friction: [1.10, 0.02, 0.002]
+  station_tol: 0.030
+  timeout_s: 25.0
+
+# La cinta. `station` es donde el paquete se PARA para que el brazo lo coja, y está
+# dentro del alcance comprobado: coincide con el centro de la mesa, que es la pose de
+# agarre ya barrida con IK.
+#
+# La banda arrastra imponiendo velocidad X al paquete apoyado en ella; el ascensor
+# mueve su plataforma y eleva por contacto. Tras cargar abajo no se reescribe la pose
+# del paquete: llega con la orientación que traiga, incluida la torcida.
+#
+# ── LA ESTACIÓN NO PUEDE ESTAR EN EL CANTO, Y ES DONDE ESTABA ───────────────────
+# Con `center: [-0.85, -0.66]` y `dims: [1.40, 0.50]` la banda acababa en x = -0.15 y la
+# estación estaba en x = -0.20: el cartón paraba con el centro a 50 mm del canto y el
+# resto EN EL AIRE. Medido sobre los tres niveles, el vuelo iba de 40 a 205 mm según el
+# bulto y su giro, y eso no se ve como un error de geometría sino como que la caja se
+# cae: en el nivel 22 el primer `std_m` llegaba VOLCADO 24.5°, y mientras el brazo
+# viajaba se hundía 36 mm y RETROCEDÍA 47 mm; en el 23 había cartones que se iban al
+# suelo (-500 y -613 mm en Z). De ahí el `ik_unreachable` del primer bulto.
+#
+# Cuánta banda hace falta por delante: el bulto más largo del generador mide 0.55 m y el
+# nivel 23 lo gira hasta 30°, así que su semihuella en X llega a
+# 0.55·cos30 + 0.36·sen30 = 0.328 m. Con la banda acabando en x = +0.15 quedan 0.35 m
+# por delante de la estación y los cartones de los tres niveles quedan ENTEROS sobre
+# ella: de 114 a 259 mm de banda por delante, vuelco 0.0° y deriva 0.0 mm.
+#
+# Y por qué además baja a y = -0.80: alargarla la mete debajo de la esquina cercana del
+# palé. Es el mismo choque que acaba de apartar la mesa —ver `table`— y se arregla
+# igual. En y = -0.66 la banda ocupaba y[-0.91, -0.41] y el palé empieza en y = -0.40:
+# con la herramienta (184 mm de hondo) bajando sobre esa esquina, el barrido de IK del
+# borde cercano pasaba de 32/180 poses irresolubles a 37/180 sólo por alargarla. En
+# y = -0.80 ocupa y[-1.05, -0.55], deja 150 mm de aire hasta la cubierta y el barrido
+# vuelve a 32/180. La estación queda donde la de la mesa, que es la pose de agarre ya
+# barrida con IK, a 0.80 m del pedestal.
+#
+# El paquete empieza ahora en el centro del ascensor, antes de la banda. La estación
+# y la superficie de recogida conservan sus cotas; la elevación añade tiempo al ciclo.
 conveyor:
-  center:                         # [x, y] de la banda, en el mundo
-  dims:                           # [largo, ancho] de la banda
-  height:                         # z de la superficie de la banda
-  speed:                          # m/s con la cinta en marcha
-  station:                        # [x, y] de la estación de recogida
-  spacing:                        # separación entre paquetes consecutivos
-  timeout_s:                      # sin entrega en este tiempo -> `timeout`
+  center: [-0.70, -0.80]          # [x, y] de la banda, en el mundo
+  dims: [1.70, 0.50]              # [largo, ancho] COMPLETAS
+  height: 0.58                    # misma cota que la mesa: la estación no cambia de sitio
+  speed: 0.25                     # m/s con la cinta en marcha
+  station: [-0.20, -0.80]         # [x, y] de la estación de recogida. Misma que la mesa
+  station_tol: 0.020              # se da por llegado dentro de esta banda, y para
+  spacing: 0.50                   # separación entre paquetes consecutivos
+  timeout_s: 25.0                 # sin entrega en este tiempo -> `timeout`
+  friction: [0.9, 0.01, 0.001]
+
+# El remolque arrimado al muelle. No es el semirremolque entero: es el trozo al que
+# llega un brazo fijo, recortado para que TODAS las poses de agarre queden dentro de la
+# envolvente de trabajo. Comprobado con IK sobre 60 cargas aleatorias: 0 de 720 poses
+# fuera de alcance.
+#
+# El recorte no es cosmético. Resolver la cinemática no es la prueba: a ras de piso, la
+# esquina más cercana al robot exige el brazo tan plegado que un eslabón se apoya en su
+# propio pedestal y los servos se quedan ~150 mm cortos de una pose que el solver da por
+# buena. Barriendo la herramienta por el piso, esa pared salió en x = +0.12 y la esquina
+# lejana fuera de alcance pasado y = -1.30; la bahía se queda corta de las dos.
+truck:
+  origin: [-0.62, -1.28]          # conserva x <= +0.12 en toda la bahía alcanzable
+  width: 0.74                     # m a lo largo de X; barrido IK: 0/720 fuera
+  depth: 0.88                     # m a lo largo de Y; barrido IK: 0/720 fuera
+  floor_height: 0.02
+  column_gap: 0.04
+  max_stack_height: 0.86
+  max_column_items: 5
+  min_support: 0.62               # fracción de la caja que tiene que caer sobre la de debajo
+  max_slide: 0.09                 # cuánto se puede desplazar del eje de su columna
+  # El desorden que sobrevive a cualquier carga cuidadosa.
+  position_jitter: 0.005
+  yaw_jitter_deg: 1.5
+  aisle: 0.46                     # hueco libre hasta la pared opuesta: lo que bascula
+                                  # un cartón mientras la muñeca lo inclina para pesarlo
 
 motion:
-  cartesian_speed:                # m/s de la interpolación entre waypoints
-  angular_speed:
-  drop_clearance:                 # altura de suelta sobre el destino
-  settle_steps:                   # pasos de física para que la escena se asiente
-  # Knobs de convergencia. Las tolerancias van POR ENCIMA del suelo medido del servo
-  # (caída estacionaria bajo carga): por debajo, `move_to` no converge nunca y todo
-  # acaba declarado `ik_unreachable`.
-  converge_s:
-  tol_pos:
-  tol_rot:
-  posture_cost:
+  # El UR10e admite 4 m/s de TCP y 120 / 120 / 180 / 180 / 180 / 180 grados/s en sus
+  # seis ejes (ficha técnica de UR, revisada en septiembre de 2026). La interpolación
+  # cúbica limita cada orden articular a esas cifras; las velocidades cartesianas de
+  # abajo quedan por debajo del límite del TCP.
+  #
+  # MEDIDO con física completa, oráculos y semilla 1: al terminar cada waypoint por
+  # tolerancia de seguimiento —y reservar el reposo estricto para el pesaje— el nivel
+  # 11 baja de 75,9 s a 45,3 s simulados y el 12 termina en 70,4 s. Los cuatro seeds
+  # 1..4 del nivel 11 terminaron bien; el mayor error de colocación fue 6,7 mm.
+  #
+  # LO QUE CUESTA, Y TAMBIÉN ESTÁ MEDIDO: velocidad a cambio de PRECISIÓN. Sobre una
+  # rejilla de niveles × semillas en física completa, el error medio de colocación sube
+  # entre un +55 % y un +66 % respecto a las velocidades viejas, y es un desplazamiento
+  # SISTEMÁTICO, no dispersión: los niveles 11 y 21 no llevan jitter y salen bit a bit
+  # iguales en las cuatro semillas —3,54 mm antes, 6,56 mm ahora, siempre—. El peor
+  # error de toda la rejilla es 8,64 mm (L33 s3) y el peor vuelo 7,4 mm, contra
+  # `tolerance_xy: 0.020` y `max_overhang: 0.020` de `pallet.yaml`: sigue holgado, pero
+  # el margen se ha reducido a la mitad. El intercambio es deliberado; si alguien vuelve
+  # a subir estas velocidades, ésta es la cifra que hay que volver a mirar.
+  cartesian_speed: 1.50           # m/s en tránsito, con la caja en el aire
+  approach_speed: 0.30            # m/s en el descenso final sobre cartón o sobre el montón
+  angular_speed: 3.00             # rad/s de giro de la herramienta
+  joint_speed_limits: [2.0944, 2.0944, 3.1416, 3.1416, 3.1416, 3.1416]
+  min_move_s: 0.15                # evita órdenes impulsivas en waypoints muy próximos
+  transit_height: 0.94            # todo el trayecto va en cartesiano a esta cota mínima
+  place_clearance: 0.18           # por encima del destino antes de bajar
+  stack_clearance: 0.22           # por encima de lo más alto del montón al cruzar
+  drop_clearance: 0.002           # altura de suelta sobre el destino
+  settle_seconds: 1.25            # física tras soltar, ANTES de medir
+  # Knobs de convergencia. Ver la cabecera de `pallet.yaml` para lo que se midió.
+  ik_tol_pos: 0.0015              # tolerancia del SOLVER, no del servo
+  ik_tol_rot: 0.015
+  ik_damping: 0.025               # mínimos cuadrados amortiguados sobre mj_jacSite
+  ik_iterations: 300
+  ik_step_limit: 0.12             # rad por iteración, para que no salte de rama
+  # Tolerancia del SERVO, que es otra cosa y va MUY por encima. Ver `pallet.yaml`.
+  reach_tolerance: 0.02
+  # ── El seguimiento del waypoint. Es el criterio con el que `_track_pose` da un
+  # waypoint por bueno y enlaza el siguiente SIN parar a reposo. Ojo: el camino de
+  # fast-forward NO usa `approach_tolerance`, usa su propio 2,5 mm; el porqué está al
+  # lado del código, en `src/cell/arm.py: move_to`.
+  #
+  #   approach_tolerance 5 mm  MEDIDO por barrido en física completa, con oráculos y
+  #       `ScorePlanner`, sobre la rejilla de niveles × semillas: con 5 mm el episodio
+  #       aguanta en todas las celdas que ya aguantaban; bajándolo a 2,5 mm, L31 s1 y
+  #       L31 s3 pasan a `stack_collapse` con 0 cajas colocadas. Es el margen que el
+  #       servo cargado necesita para poder frenar y enlazar; por debajo, la corrección
+  #       fina no converge dentro del timeout y la maniobra se descuadra. El fallo duro
+  #       —pose realmente inalcanzable— lo sigue decidiendo `reach_tolerance`, 20 mm.
+  approach_tolerance: 0.005
+  # Los tres de abajo SIN MEDIR: son los valores con los que se desarrolló el enlace de
+  # waypoints y no hay barrido que los respalde. Funcionan, pero nadie ha buscado su
+  # fondo de curva; si aparece un `timeout` o un contacto brusco en el descenso, son los
+  # primeros sospechosos y hay que medirlos antes de tocarlos, no ajustarlos a ojo.
+  approach_end_speed: 0.05        # rad/s; no se toca cartón hasta frenar por debajo
+  tracking_steps: 5               # 10 ms dentro de tolerancia con timestep de 2 ms
+  tracking_timeout_s: 0.50        # tras esto se calcula una nueva corrección cartesiana
+  rest_speed: 0.008               # se da por parado por debajo de esta velocidad articular
+  rest_steps: 25                  # ...sostenida tantos pasos, para que un cruce por cero
+                                  # a mitad de oscilación no pase por quietud
+  rest_timeout: 800
 
 episode:
-  control_hz: 50
+  control_hz: 50                  # timestep de física 0.002 s -> 10 pasos por tick
+  timestep: 0.002

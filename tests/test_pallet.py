@@ -1,32 +1,761 @@
-"""
-Las comprobaciones que corren SIN simulador y SIN red, en segundos.
+"""Contrato rápido del paletizado. No arranca MuJoCo ni usa la red."""
 
-PORTAR desde `~/HackSpain/paletizado-guionizado/tests/test_pallet.py`. Son asserts
-planos, sin framework: `python tests/test_pallet.py`.
+from __future__ import annotations
 
-Existen porque el resto de la comprobación es cara: un episodio son minutos de física, y
-descubrir ahí que una clave está mal escrita significa haber tirado la ejecución entera.
-Peor: media docena de los errores que este contrato permite **no dan error**. Una clave
-de payload que falta deja la interfaz en blanco sin avisar; una columna mal escrita es un
-400 que el SDK se traga y que apaga la subida del resto del run. Esto los caza antes.
+import itertools
+import json
+import re
+import sys
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
 
-Lo que se porta tal cual:
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
-  - que las claves de cada fila sean exactamente las columnas de su tabla
-  - que los `seq` de los eventos no se repitan dentro de un episodio
-  - que las vistas de las cámaras estén en `top|side|iso|camera`
-  - que las causas de fallo estén en el vocabulario de ocho
-  - `test_the_cog_counts_boxes_outside_tolerance` — una caja mal puesta sigue pesando
-  - los cuatro casos que anclan `stability_margin` contra el polígono de soporte
+import numpy as np  # noqa: E402
+from theker_telemetry import FAILURES, TASKS  # noqa: E402
 
-Lo que hay que AÑADIR aquí, que allí no tenía sentido:
+from placing import METRIC_NAMES  # noqa: E402
+from scripts.palletize import (  # noqa: E402
+    _aborted,
+    _request_unwind,
+    install_termination_unwind,
+    oracle_for,
+    parser,
+)
+from src import measure  # noqa: E402
+from src.cell import plant  # noqa: E402
+from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
+from src.cell.scene import (  # noqa: E402
+    DECORS,
+    SOURCES,
+    TASK_DECADE,
+    TASKS,
+    Level,
+    lane_for,
+    levels,
+    lighting_for,
+    load_configs,
+    parking_grid,
+)  # noqa: E402
+from src.cell.stability import count_fallen_boxes  # noqa: E402
+from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
+from src.episode import Episode  # noqa: E402
+from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
+from src.planner.heuristic import ScorePlanner  # noqa: E402
+from src.planner.naive import BeamPlanner, GridPlanner  # noqa: E402
+from src.telemetry import pallet_state_row, placement_row, run_config  # noqa: E402
+from src.training import (  # noqa: E402
+    PlacementSimulationResult,
+    TrainingLog,
+    resolve_weights,
+    train_weights,
+)
+from src.vision.surface import (  # noqa: E402
+    CameraIntrinsics, CameraPose, fuse_max, rasterize_points, unproject_depth,
+)
 
-  - **`events.kind` está dentro de los seis permitidos.** Con cinta de por medio la
-    tentación de inventar un kind es real, y la base lo rechaza tarde.
-  - **La heurística devuelve un score en [0, 1] y un `breakdown` no vacío.** Sin esto un
-    planificador que siempre devuelve 0.0 pasa desapercibido.
-  - **La heurística devuelve `None` cuando no cabe nada**, en vez de lanzar.
-  - **Los pesos de `configs/pallet.yaml` suman 1.0.** Es la clase de error que solo se
-    nota como "el planificador se ha vuelto raro".
-  - **`oracle` es `any(stub en uso)`** para cada combinación de banderas.
-"""
+CFG = load_configs(REPO)
+EVENT_KINDS = {"perceive", "plan", "pick", "place", "settle", "fail"}
+EXPECTED_FAILURES = {
+    "no_detection", "ik_unreachable", "collision", "grasp_slip",
+    "wrong_placement", "timeout", "stack_collapse", "overhang_violation",
+}
+
+
+def _placement(x=0.0, y=0.0, *, placed=True, cog=(0.0, 0.0, 0.0)):
+    spec = PackageSpec("box-1", "std_m", (0.42, 0.30, 0.18), 4.2, np.array(cog))
+    plan = PlacementPlan(np.array([x, y, 0.09]), 0.0, 1, "slot-1", 0.8, 1.0,
+                         {"support": 1.0})
+    box = SimpleNamespace(package_id="box-1", type_name="std_m")
+    position = np.array([x, y, 0.09])
+    return measure.Placement(
+        box, spec, plan, position, 0.0, position.copy(), 0.0, 0.0,
+        1.0, 0.0, placed,
+    )
+
+
+def test_rows_match_supabase_columns() -> None:
+    placement = _placement()
+    assert set(placement_row(0, placement)) == {
+        "seq", "package_id", "package_type", "mass_kg", "dims_m", "layer",
+        "planned_pose", "actual_pose", "error_xy_m", "error_yaw_rad",
+        "support_ratio", "overhang_m", "placed",
+    }
+    state = measure.pallet_state([placement])
+    assert set(pallet_state_row(0, state, 0.002)) == {
+        "after_seq", "mass_kg", "cog_x", "cog_y", "cog_z",
+        "stability_margin_m", "fill_ratio", "settle_drift_m",
+    }
+
+
+def test_event_rows_use_closed_vocabulary_and_unique_seq() -> None:
+    episode = Episode(seed=1, n_objects=1)
+    for seq, kind in enumerate(("perceive", "pick", "plan", "place", "settle", "fail")):
+        episode.events.append({
+            "ts": float(seq), "seq": seq, "kind": kind,
+            "package_id": "box-1", "payload": {},
+        })
+    assert {event["kind"] for event in episode.events} <= EVENT_KINDS
+    seqs = [event["seq"] for event in episode.events]
+    assert seqs == sorted(set(seqs))
+
+
+def test_views_and_failures_match_the_schema() -> None:
+    assert set(CFG["cameras"]) == set(VIEWS) == {"top", "side", "iso", "camera"}
+    assert set(FAILURES) == EXPECTED_FAILURES
+    # `task` es la fuente. Si el SDK no la conoce, `EpisodeResult` lanza y el episodio
+    # no sube: que falle aquí en un segundo y no a mitad de un run.
+    assert set(SOURCES) <= set(TASKS), sorted(set(SOURCES) - set(TASKS))
+
+
+def test_level_ids_encode_the_task() -> None:
+    catalogue = levels(CFG)
+    assert len(catalogue) == 17
+    assert len(set(catalogue)) == 17
+    assert {level.source for level in catalogue.values()} == set(SOURCES)
+    assert {level.task for level in catalogue.values()} == set(TASKS)
+    for level in catalogue.values():
+        # La decena es la TAREA, no la fuente: los niveles de ajetreo cogen de la mesa
+        # y viven en la 4x. Ver la cabecera de `configs/pallet.yaml`.
+        assert level.id // 10 == TASK_DECADE[level.task]
+        assert level.task in TASKS
+        assert level.decor in DECORS
+
+
+def test_the_jostling_levels_shake_without_being_asked() -> None:
+    """La decena 4x sacude porque el ensayo ES su tarea, no un extra que se pide."""
+    catalogue = levels(CFG)
+    jostling = [level for level in catalogue.values() if level.task == "ajetreo"]
+    assert len(jostling) == 3
+    for level in jostling:
+        assert level.shakes
+        assert level.id // 10 == 4
+        assert level.source in SOURCES          # siguen cogiendo de algún sitio
+    # Y ningún otro nivel sacude solo.
+    for level in catalogue.values():
+        if level.task != "ajetreo":
+            assert not level.shakes
+
+
+def test_the_plant_only_lends_its_scenery() -> None:
+    """Lo que la nave NO puede traerse a la celda. Ver `src/cell/plant.py`.
+
+    Sin simulador: la exportación de Blender es un fichero ajeno que alguien puede
+    regenerar, y las cinco cosas de abajo fallan tarde y en silencio si se cuela una.
+    """
+    decor = plant.decor_xml(CFG, simplified=False)
+    assert "<freejoint" not in decor      # metería 21 qpos ajenos al episodio
+    assert "<light" not in decor          # el rig lo escribe plant.lighting_xml
+    assert "<camera" not in decor         # `overview` no está en VIEWS: 23514
+    assert "<body" not in decor           # todo el atrezo es estático
+    assert 'name="plant_floor"' not in decor   # el suelo lo pone la celda
+
+    names = re.findall(r'<geom name="([^"]+)"', decor)
+    assert len(names) == len(set(names)), "nombre repetido en el decorado"
+    assert all(name.startswith("plant_") for name in names)
+    # Sin contacto: es un fondo, no mobiliario.
+    assert decor.count('contype="0" conaffinity="0"') == len(names)
+
+    # Y que la paleta del fichero siga siendo la que hay declarada: si se re-exporta la
+    # nave con colores nuevos, `plant.decor_xml` ya habría lanzado al llegar aquí.
+    mjcf = CFG["_root"] / CFG["plant"]["mjcf"]
+    used = set(re.findall(r'rgba="([^"]+)"', mjcf.read_text(encoding="utf-8")))
+    assert used <= set(plant.MATERIAL_FOR_RGBA), sorted(used - set(plant.MATERIAL_FOR_RGBA))
+
+
+def test_the_plant_decor_does_not_change_the_other_levels() -> None:
+    """`decor` es un vocabulario cerrado y su defecto es la celda de siempre."""
+    catalogue = levels(CFG)
+    assert catalogue[34].decor == "plant"
+    assert {level.decor for level in catalogue.values() if level.id != 34} == {"cell"}
+    # Cada decorado trae sus propias medias medidas, y los dos declaran el headlight.
+    for level in (catalogue[33], catalogue[34]):
+        light = lighting_for(CFG, level)
+        assert {"headlight_diffuse", "headlight_ambient", "headlight_specular"} <= set(light)
+    assert lighting_for(CFG, catalogue[33]) is CFG["lighting"]
+    assert lighting_for(CFG, catalogue[34]) is CFG["plant"]["lighting"]
+
+
+def test_the_stability_protocol_is_explicit_and_opt_in() -> None:
+    protocol = CFG["stability_test"]
+    assert protocol["levels_g"] == [0.05, 0.15, 0.30, 0.50, 0.80]
+    assert protocol["axes"] == ["x", "y", "z"]
+    assert len(protocol["levels_g"]) * len(protocol["axes"]) == 15
+    assert parser().parse_args([]).stability_test is False
+    assert parser().parse_args(["--stability-test"]).stability_test is True
+
+
+def test_stability_counts_box_falls_across_restored_trials() -> None:
+    """La misma caja en dos ensayos son dos fallos, pero un solo id distinto."""
+    package = lambda package_id, fell: {  # noqa: E731
+        "package_id": package_id, "fell_off": fell,
+    }
+    result = {
+        "ran": True,
+        "shake": {"trials": [
+            {"packages": [package("a", True), package("b", False)]},
+            {"packages": [package("a", True), package("b", True)]},
+        ]},
+        "beam": {"trials": [
+            {"packages": [package("a", False), package("b", True)]},
+        ]},
+    }
+    falls = count_fallen_boxes(result)
+    assert falls["total"] == 4
+    assert falls["opportunities"] == 6
+    assert falls["unique_packages"] == 2
+    assert falls["package_ids"] == ["a", "b"]
+    assert falls["by_protocol"] == {"shake": 3, "beam": 1}
+
+
+def test_weight_training_validates_terms_and_flushes_trace_rows() -> None:
+    weights = resolve_weights(CFG, {"pallet_com": 1.25})
+    assert set(weights) == set(METRIC_NAMES)
+    assert weights["pallet_com"] == 1.25
+    try:
+        resolve_weights(CFG, {"invented": 1.0})
+    except ValueError as error:
+        assert "invented" in str(error)
+    else:
+        raise AssertionError("un peso desconocido se aceptó en silencio")
+
+    with tempfile.TemporaryDirectory() as raw:
+        directory = Path(raw) / "trace"
+        directory.mkdir()
+        log = TrainingLog(directory)
+        log.emit("evaluation_progress", evaluation_id="e1", phase="placement", seq=0)
+        row = json.loads(log.progress_path.read_text(encoding="utf-8"))
+        assert row["event"] == "evaluation_progress"
+        assert row["evaluation_id"] == "e1" and row["seq"] == 0
+        relative = log.evaluation("e1", {"fallen_boxes_total": 2})
+        assert relative == "evaluations/e1.json"
+        assert json.loads((directory / relative).read_text())["fallen_boxes_total"] == 2
+
+        def fake_evaluator(weights, *, level, seed, progress, **_kwargs):
+            progress({"phase": "placement", "seq": 0, "status": "placed"})
+            return PlacementSimulationResult(
+                level=level,
+                seed=seed,
+                weights=dict(weights),
+                n_objects=1,
+                n_planned=1,
+                n_placed=1,
+                n_on_pallet=1,
+                failure=None,
+                stability_trials=3,
+                decisions=[],
+                stability={
+                    "ran": True,
+                    "falls": {
+                        "total": 0,
+                        "opportunities": 3,
+                        "unique_packages": 0,
+                        "package_ids": [],
+                        "by_protocol": {"shake": 0, "beam": 0},
+                    },
+                },
+                simulated_seconds=1.0,
+                elapsed_seconds=0.01,
+            )
+
+        training = train_weights(
+            levels=(11,),
+            seeds=(1,),
+            iterations=1,
+            population=2,
+            cfg=CFG,
+            output_directory=Path(raw) / "run",
+            console=None,
+            evaluator=fake_evaluator,
+        )
+        assert training.evaluations == 2 and training.best_loss == 0
+        assert (training.output_directory / "manifest.json").exists()
+        assert (training.output_directory / "config_snapshot.json").exists()
+        assert (training.output_directory / "source_snapshot/src/training.py").exists()
+        assert (training.output_directory / "best_weights.json").exists()
+        events = [
+            json.loads(line)["event"]
+            for line in (training.output_directory / "progress.jsonl").read_text().splitlines()
+        ]
+        assert events.count("evaluation_started") == 2
+        assert events.count("evaluation_finished") == 2
+        assert events[-1] == "training_finished"
+
+
+def test_beam_weights_sum_to_one() -> None:
+    assert abs(sum(CFG["planner"]["weights"].values()) - 1.0) < 1e-9
+
+
+def test_heuristic_weights_are_the_fourteen_terms() -> None:
+    """Los de `placing` NO suman 1, y no tienen que hacerlo.
+
+    El score se normaliza dividiendo por la suma de pesos, así que lo que hay que anclar
+    es que están los catorce y ninguno negativo. Una clave mal escrita aquí no da error:
+    `weight_vector()` la rellena con 0.0 y el término se apaga en silencio.
+    """
+    weights = CFG["heuristic"]["weights"]
+    assert set(weights) == set(METRIC_NAMES), set(weights) ^ set(METRIC_NAMES)
+    assert all(value >= 0.0 for value in weights.values())
+
+
+def test_static_obstacles_stamp_the_named_tables_of_the_level() -> None:
+    """El oráculo estampa DOS mesas por su nombre, y la de recogida sólo si se monta.
+
+    Hoy ninguna de las dos pisa la huella del palé (60 mm de aire la de recogida, 50 mm
+    la auxiliar), así que sin mover nada se estampan cero celdas: eso es lo primero que
+    se comprueba, porque es lo que deja de ser cierto si alguien retoca `scene.yaml`.
+    Luego se mueven las dos a mano sobre la cubierta para ejercitar el gate, que es la
+    única lógica nueva y la que no tendría red de otro modo.
+    """
+    grid = _empty_pallet_map()
+    ny, nx = grid.cells.shape
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+
+    def stamp(source: str, cfg: dict) -> np.ndarray:
+        cells = np.zeros((ny, nx))
+        scene = SimpleNamespace(cfg=cfg, deck_z=deck_z, level=SimpleNamespace(source=source))
+        _stamp_static_obstacles(scene, cells, grid.origin, grid.cell_size, nx, ny)
+        return cells
+
+    for source in SOURCES:
+        assert stamp(source, CFG).max() == 0.0, f"{source}: una mesa invade la huella del palé"
+
+    # Las dos corridas sobre la cubierta, sin solaparse entre sí: x[-0.11, 0.61] la de
+    # recogida y x[0.70, 1.20] la auxiliar, ambas centradas en y=0.
+    invaded = dict(CFG)
+    invaded["table"] = {**CFG["table"], "center": [0.25, 0.0]}
+    invaded["auxiliary_table"] = {**CFG["auxiliary_table"], "center": [0.95, 0.0]}
+    row = round((0.0 - grid.origin[1]) / grid.cell_size)
+    pick_col = round((0.25 - grid.origin[0]) / grid.cell_size)
+    auxiliary_col = round((0.95 - grid.origin[0]) / grid.cell_size)
+    expected = float(CFG["auxiliary_table"]["height"]) - deck_z
+
+    on_belt = stamp("conveyor", invaded)
+    assert on_belt[row, auxiliary_col] == expected, "la auxiliar existe en todos los niveles"
+    assert on_belt[row, pick_col] == 0.0, "la mesa de recogida no se monta fuera de los 1x"
+
+    on_table = stamp("table", invaded)
+    assert on_table[row, auxiliary_col] == expected
+    assert on_table[row, pick_col] == float(CFG["table"]["height"]) - deck_z
+
+
+def _empty_pallet_map() -> Heightmap:
+    """Un palé vacío con la rejilla y el origen de verdad de esta celda."""
+    cell = float(CFG["heuristic"]["cell_size"])
+    length, width = (float(v) for v in CFG["pallet"]["dims"])
+    center_x, center_y = (float(v) for v in CFG["pallet"]["center"])
+    nx, ny = round(length / cell), round(width / cell)
+    return Heightmap(
+        cells=np.zeros((ny, nx)),
+        origin=(center_x - length / 2, center_y - width / 2),
+        cell_size=cell,
+    )
+
+
+def test_the_adapter_translates_degrees_and_the_deck() -> None:
+    """Las dos traducciones que fallan en SILENCIO: yaw y el convenio de alturas.
+
+    `placing` habla grados y Z del mundo; este repo, radianes y metros sobre la cubierta.
+    Ninguna de las dos peta si se olvida: las cajas acaban giradas 57° o flotando (o
+    hundidas) exactamente la cota de la cubierta.
+    """
+    planner = ScorePlanner(CFG)
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+
+    # Una caja mucho más larga que ancha sólo cabe girada en un palé estrecho: así se
+    # fuerza un yaw de 90° sin tener que adivinar cuál elige la heurística.
+    narrow = Heightmap(cells=np.zeros((60, 40)), origin=(0.0, -0.20), cell_size=0.01)
+    plan = ScorePlanner(CFG).choose(
+        PackageSpec("b", "std_m", (0.55, 0.20, 0.10), 2.0, np.zeros(3)), narrow
+    )
+    assert plan is not None
+    assert abs(plan.yaw - np.pi / 2) < 1e-9, f"yaw={plan.yaw} no son 90° en radianes"
+
+    # Altura de mapa 0 = la cubierta del palé, no el suelo.
+    plan = planner.choose(
+        PackageSpec("b", "std_m", (0.42, 0.30, 0.18), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is not None
+    z_base = float(plan.position[2]) - 0.18 / 2
+    assert abs(z_base - deck_z) < 1e-6, f"z_base={z_base} debería ser deck_z={deck_z}"
+
+
+def test_the_chosen_pose_lands_on_the_pallet() -> None:
+    """Ida y vuelta de tipos: si el origen o la celda se traducen mal, se sale y se ve."""
+    heightmap = _empty_pallet_map()
+    dims = (0.42, 0.30, 0.18)
+    plan = ScorePlanner(CFG).choose(
+        PackageSpec("b", "std_m", dims, 4.2, np.zeros(3)), heightmap
+    )
+    assert plan is not None
+    ny, nx = heightmap.cells.shape
+    x0, y0 = heightmap.origin
+    x1 = x0 + nx * heightmap.cell_size
+    y1 = y0 + ny * heightmap.cell_size
+    half_x, half_y = (dims[1] / 2, dims[0] / 2) if abs(plan.yaw) > 0.1 else (dims[0] / 2, dims[1] / 2)
+    assert x0 - 1e-9 <= plan.position[0] - half_x and plan.position[0] + half_x <= x1 + 1e-9
+    assert y0 - 1e-9 <= plan.position[1] - half_y and plan.position[1] + half_y <= y1 + 1e-9
+
+
+def test_score_planner_returns_none_and_says_why() -> None:
+    """Que no quepa es un resultado, no una excepción — y el porqué se registra."""
+    planner = ScorePlanner(CFG)
+    plan = planner.choose(
+        PackageSpec("gigante", "std_m", (2.0, 2.0, 0.2), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is None
+    # Ni un candidato generado: no cabe ni en un palé vacío. `{}` NO es lo mismo que
+    # "todos rechazados", y la diferencia es la que dice qué hacer con la caja.
+    assert planner.last_reject == {}
+
+    plan = planner.choose(
+        PackageSpec("b", "std_m", (0.42, 0.30, 0.18), 4.2, np.zeros(3)),
+        _empty_pallet_map(),
+    )
+    assert plan is not None
+    assert 0.0 <= plan.score <= 1.0
+    assert set(plan.breakdown) == set(METRIC_NAMES)
+    assert planner.last_reject is None
+
+
+def test_record_reads_the_pallet_frame_and_groups_the_layer() -> None:
+    """`measure.Placement.position` va en el frame del PALÉ, no en el del mundo.
+
+    Las dos formas de equivocarse aquí no dan error, sólo números plausibles:
+
+      - Restarle `deck_z` a una Z que ya está sobre la cubierta deja los niveles en
+        −0.144, y entonces una caja puesta en la cubierta sale como capa 2. `measure` le
+        busca apoyo en la capa 1 en vez de en el palé y la traza dice 0 % de apoyo sobre
+        un montón perfectamente plano.
+      - Agrupar los niveles con `set()` en vez de con tolerancia cuenta cada caja de la
+        misma capa como un nivel propio, y la capa sube de una en una.
+    """
+    planner = ScorePlanner(CFG)
+    # Dos cajas asentadas en la cubierta, a alturas que difieren en micras.
+    for dz in (0.0, 4e-6):
+        planner.record(_placement(0.1, 0.1))
+        planner._levels[-1] = 0.18 / 2 - 0.18 / 2 + dz    # base 0 en el frame del palé
+    assert max(abs(level) for level in planner._levels) < 1e-5, planner._levels
+
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+    assert planner._layer(deck_z) == 1                    # en la cubierta
+    assert planner._layer(deck_z + 0.18) == 2             # encima de esas dos: capa 2
+    planner._levels.append(0.18)
+    assert planner._layer(deck_z + 0.36) == 3
+
+
+def test_the_m_key_draws_the_height_map_grid() -> None:
+    """La rejilla del visor: se enciende, cabe en el presupuesto y marca lo no observado.
+
+    Sin visor no hace nada —por eso se puede llamar siempre—; con visor pinta un prisma
+    por celda submuestreada, y las celdas que ninguna cámara vio salen con otro color,
+    que es la única forma de verlas: guardan altura 0 igual que la cubierta libre.
+    """
+    geoms = [SimpleNamespace(rgba=np.zeros(4), pos=np.zeros(3)) for _ in range(2000)]
+    viewer = SimpleNamespace(
+        user_scn=SimpleNamespace(ngeom=0, maxgeom=2000, geoms=geoms),
+        sync=lambda: None,
+    )
+
+    def init_geom(geom, *, type, size, pos, mat, rgba):
+        geom.rgba = np.asarray(rgba, dtype=float)
+        geom.pos = np.asarray(pos, dtype=float)
+
+    fake_mujoco = SimpleNamespace(
+        mjv_initGeom=init_geom,
+        mjtGeom=SimpleNamespace(mjGEOM_BOX=6),
+    )
+    heightmap = _empty_pallet_map()
+    observed = np.ones(heightmap.cells.shape, dtype=bool)
+    observed[:20, :20] = False
+    heightmap = Heightmap(heightmap.cells, heightmap.origin, heightmap.cell_size, observed)
+    scene = SimpleNamespace(viewer=viewer, mujoco=fake_mujoco, cfg=CFG,
+                            deck_z=float(CFG["pallet"]["deck_thickness"]),
+                            show_heightmap=False)
+
+    draw_heightmap(scene, heightmap)
+    assert viewer.user_scn.ngeom == 0, "apagado no pinta nada"
+
+    scene.show_heightmap = True                      # esto es lo que hace la tecla `m`
+    draw_heightmap(scene, heightmap)
+    painted = viewer.user_scn.ngeom
+    assert 0 < painted <= HEIGHTMAP_BUDGET, painted
+    colours = {tuple(np.round(geoms[i].rgba, 3)) for i in range(painted)}
+    assert len(colours) == 2, f"observado y no observado deberían distinguirse: {colours}"
+    # Y todo cae sobre la huella del palé, no en el suelo de al lado.
+    x0, y0 = heightmap.origin
+    ny, nx = heightmap.cells.shape
+    for i in range(painted):
+        assert x0 <= geoms[i].pos[0] <= x0 + nx * heightmap.cell_size
+        assert y0 <= geoms[i].pos[1] <= y0 + ny * heightmap.cell_size
+        assert geoms[i].pos[2] >= scene.deck_z
+
+    scene.viewer = None
+    draw_heightmap(scene, heightmap)                 # sin visor: ni pincha ni corta
+
+
+def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
+    """`M` YA era el atajo de MuJoCo para "Center of Mass", y pinta esferas blancas.
+
+    Las veintiséis letras están cogidas por las banderas del visor, así que la rejilla no
+    tiene ninguna libre: se queda con la tecla y deja la bandera de MuJoCo apagada. Si se
+    comparte, una pulsación enciende las esferas y apaga la rejilla, que es justo el
+    síntoma que hay que evitar.
+    """
+    import mujoco
+
+    assert mujoco.mjVISSTRING[mujoco.mjtVisFlag.mjVIS_COM][2].upper() == "M", (
+        "MuJoCo ha cambiado el atajo; revisa si la rejilla puede recuperar la tecla"
+    )
+
+    opt = mujoco.MjvOption()
+    opt.flags[mujoco.mjtVisFlag.mjVIS_COM] = 1       # como si el visor la hubiera puesto
+    viewer = SimpleNamespace(
+        opt=opt,
+        user_scn=SimpleNamespace(ngeom=0, maxgeom=16, geoms=[]),
+        sync=lambda: None,
+    )
+    scene = SimpleNamespace(viewer=viewer, mujoco=mujoco, cfg=CFG,
+                            deck_z=0.144, show_heightmap=False)
+    draw_heightmap(scene, _empty_pallet_map())
+    assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
+
+
+def test_the_feeder_lane_lands_exactly_on_the_table() -> None:
+    """La banda de mesa acaba en el canto de la mesa y entrega a su centro.
+
+    Son tres números que tienen que cuadrar entre dos bloques de YAML distintos, y
+    ninguno de los tres avisa si deja de cuadrar:
+
+      - Si la banda acaba ANTES del canto, el cartón cae por el hueco y lo que se mide
+        después es una caja en el suelo.
+      - Si acaba DESPUÉS, la banda atraviesa la mesa.
+      - Si las cotas no coinciden, hay un escalón: `Belt._riding` mira la ALTURA para
+        decidir a quién arrastra, así que con medio centímetro de diferencia la banda
+        deja de empujar justo al llegar a la mesa y el episodio muere en `timeout`.
+
+    Por eso `lane_for` DERIVA el centro de la banda del canto de la mesa en vez de
+    llevarlo escrito: aquí sólo se comprueba que la derivación siga diciendo lo que dice
+    su docstring.
+    """
+    lane = lane_for(CFG, "table")
+    table = CFG["table"]
+    table_x, table_y = (float(v) for v in table["center"])
+    edge = table_x - float(table["size"][0])
+
+    downstream = float(lane["center"][0]) + float(lane["dims"][0]) / 2
+    assert abs(downstream - edge) < 1e-9, f"la banda acaba en {downstream}, el canto en {edge}"
+    assert float(lane["height"]) == float(table["height"]), "escalón entre banda y mesa"
+    assert tuple(lane["station"]) == (table_x, table_y), "no entrega al centro de la mesa"
+    assert float(lane["center"][1]) == table_y, "la banda y la mesa en carriles distintos"
+
+
+def test_the_black_box_hides_everything_that_waits() -> None:
+    """Los que esperan caben dentro del cerramiento, y no en una fila hasta el infinito.
+
+    El aparcamiento anterior era `x = -3 - i*0.7`: con los treinta bultos del nivel 17
+    son 21 m de cartones saliéndose de la escena. La rejilla se dimensiona con la carga,
+    así que lo que hay que anclar es que el cerramiento la tape ENTERA —si alguien toca
+    `pitch`, `columns` o `margin`, los que esperan aparecen atravesando la pared— y que
+    no invada la banda por la que tienen que salir.
+    """
+    boxes = [SimpleNamespace(index=i, dims_m=(0.55, 0.36, 0.26)) for i in range(30)]
+    for source in ("table", "conveyor"):
+        lane = lane_for(CFG, source)
+        slots = parking_grid(CFG, boxes, lane)
+        assert len(slots) == len(boxes)
+
+        pitch_x, pitch_y = (float(v) for v in CFG["black_box"]["pitch"])
+        assert all(
+            abs(a[0] - b[0]) >= pitch_x - 1e-9 or abs(a[1] - b[1]) >= pitch_y - 1e-9
+            for i, a in enumerate(slots) for b in slots[i + 1:]
+        ), f"{source}: dos bultos esperando en el mismo hueco"
+
+        # Todos aguas arriba de la boca: ninguno aparece ya sobre la banda.
+        mouth = float(lane["center"][0]) - float(lane["dims"][0]) / 2
+        assert max(x for x, _ in slots) < mouth, f"{source}: alguien espera sobre la banda"
+
+        # Y ninguno más lejos de lo que el cerramiento puede tapar.
+        span = max(x for x, _ in slots) - min(x for x, _ in slots)
+        assert span < 6.0, f"{source}: la rejilla se va a {span:.1f} m"
+
+
+def test_depth_fuses_into_the_height_map() -> None:
+    """La fusión, sin MuJoCo: un fotograma sintético cae en la celda que le toca.
+
+    Cámara cenital a 2 m mirando hacia abajo sobre un palé de 0.20x0.20. La mitad de la
+    imagen ve una tapa a 0.30 m y la otra mitad la cubierta a 0.144. Lo que NO se ve
+    tiene que quedar `observed=False`, que es la diferencia entre "no hay nada" y "no
+    lo sé", y es justo lo que el oráculo no puede decir.
+    """
+    width = height = 128
+    fovy, cam_z, surface_z = 45.0, 0.60, 0.30
+    fy = height / (2.0 * np.tan(np.deg2rad(fovy) / 2.0))
+    intrinsics = CameraIntrinsics(fx=fy, fy=fy, cx=(width - 1) / 2, cy=(height - 1) / 2,
+                                  width=width, height=height, fovy_deg=fovy)
+    # Cenital: la cámara mira por su −Z, que con esta rotación es el −Z del mundo.
+    pose = CameraPose(pos=np.array([0.10, 0.10, cam_z]), rot=np.eye(3))
+    depth = np.full((height, width), cam_z - surface_z, dtype=np.float32)
+    # Una franja central que ninguna cámara ve. Va en el medio a propósito: cae DENTRO
+    # de la huella del palé, que es donde la distinción importa. Y tiene que ser MÁS
+    # ANCHA que una celda (≈1.9 mm por fila aquí, celda de 20 mm) o las filas de al lado
+    # rellenan la celda igual y el hueco no llega a existir.
+    depth[52:78, :] = np.nan
+
+    points = unproject_depth(depth, intrinsics, pose, min_upward_nz=0.45)
+    hmap = rasterize_points(points, origin_xy=(0.0, 0.0), length=0.20, width=0.20,
+                            resolution=0.02, z_min=-0.005, z_max=2.5)
+    fused = fuse_max([hmap, hmap])               # fusionar consigo mismo no cambia nada
+
+    seen = fused.heights[fused.observed]
+    assert seen.size, "no se observó ni una celda"
+    assert np.allclose(seen, surface_z, atol=0.005), (float(seen.min()), float(seen.max()))
+    assert not fused.observed.all(), "la franja NaN tendría que quedar sin observar"
+    # Altura 0 y sin observar NO es lo mismo que cubierta libre: es lo que aporta medir.
+    assert np.all(fused.heights[~fused.observed] == 0.0)
+
+
+def test_oracle_is_any_stub_for_every_combination() -> None:
+    for flags in itertools.product((False, True), repeat=4):
+        assert oracle_for(*flags) is any(flags)
+
+
+def test_an_aborted_episode_is_unsuccessful_without_inventing_a_failure() -> None:
+    scene = SimpleNamespace(
+        level=SimpleNamespace(id=11, source="table", task="table"),
+        boxes=[object()], clock=1.25, oracle=False,
+    )
+    result = _aborted(7, scene)
+    assert result.success is False
+    assert result.failure is None
+    assert result.metrics["aborted"] is True
+    assert result.task == "table"
+
+
+def test_sigterm_unwinds_like_ctrl_c() -> None:
+    import signal
+
+    previous = signal.getsignal(signal.SIGTERM)
+    try:
+        install_termination_unwind()
+        assert signal.getsignal(signal.SIGTERM) is _request_unwind
+        try:
+            _request_unwind(signal.SIGTERM, None)
+        except KeyboardInterrupt:
+            pass
+        else:
+            raise AssertionError("SIGTERM tiene que deshacer como Ctrl-C")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def test_sigterm_runs_the_finally_that_closes_an_episode() -> None:
+    """El default de SIGTERM mata sin finally; el CLI no puede permitírselo."""
+    import signal
+    import subprocess
+    import tempfile
+    import textwrap
+
+    marker = Path(tempfile.mkdtemp()) / "cleaned"
+    child = textwrap.dedent(f"""\
+        import sys, time
+        from pathlib import Path
+        sys.path.insert(0, {str(REPO)!r})
+        from scripts.palletize import install_termination_unwind
+        install_termination_unwind()
+        try:
+            print("ready", flush=True)
+            time.sleep(30)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            Path(sys.argv[1]).write_text("ok")
+    """)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", child, str(marker)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        assert proc.stdout is not None
+        line = proc.stdout.readline().strip()
+        if line != "ready":
+            err = proc.stderr.read() if proc.stderr else ""
+            raise AssertionError(f"el hijo no arrancó: {line!r}\n{err}")
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=8) != -signal.SIGTERM
+        assert marker.read_text() == "ok"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
+def test_planners_keep_their_contract() -> None:
+    heightmap = Heightmap(np.zeros((20, 30)), (0.0, 0.0), 0.04)
+    spec = PackageSpec("box-1", "std_m", (0.42, 0.30, 0.18), 4.2, np.zeros(3))
+    naive = GridPlanner(CFG).choose(spec, heightmap)
+    scored = BeamPlanner(CFG).choose(spec, heightmap)
+    assert naive is not None and naive.score == 0.0 and naive.breakdown == {}
+    assert scored is not None and 0.0 <= scored.score <= 1.0 and scored.breakdown
+    impossible = PackageSpec("huge", "huge", (2.0, 2.0, 0.2), 1.0, np.zeros(3))
+    assert GridPlanner(CFG).choose(impossible, heightmap) is None
+    assert BeamPlanner(CFG).choose(impossible, heightmap) is None
+
+
+def test_cog_counts_boxes_outside_tolerance() -> None:
+    good = _placement(-0.05, placed=True)
+    bad = _placement(0.05, placed=False, cog=(0.02, 0.0, 0.0))
+    only_good = measure.pallet_state([good])
+    both = measure.pallet_state([good, bad])
+    assert both.mass_kg > only_good.mass_kg
+    assert both.cog[0] > only_good.cog[0]
+
+
+def test_a_box_left_on_the_table_is_not_on_the_pallet() -> None:
+    scene = SimpleNamespace(pallet_dims=(1.2, 0.8))
+    on = _placement(0.0, 0.0, placed=False)
+    off = _placement(0.0, 0.7, placed=False)
+    assert measure.on_pallet(scene, [on, off]) == [on]
+
+
+def test_stability_margin_uses_the_support_polygon() -> None:
+    base = [(-0.05, 0.0, 0.10, 0.06), (0.05, 0.0, 0.10, 0.06)]
+    assert measure.support_polygon(base) == (-0.10, 0.10, -0.03, 0.03)
+    centered = measure.stability_margin(0.0, 0.0, 0.05, base)
+    assert round(centered, 9) == round(0.03 - 0.28 * 0.05, 9)
+    assert measure.stability_margin(0.0, 0.0, 0.10, base) < centered
+    assert measure.stability_margin(0.0, 0.05, 0.05, base) < 0.0
+    assert measure.stability_margin(0.0, 0.0, 0.0, []) == 0.0
+
+
+def test_run_config_names_source_level_and_real_pallet() -> None:
+    scene = SimpleNamespace(
+        cfg=CFG,
+        level=Level(11, "table", "mesa", 1, ("std_m",)),
+        boxes=[SimpleNamespace(
+            package_id="box-1", type_name="std_m", dims_m=(0.42, 0.30, 0.18),
+            mass_kg=4.2,
+        )],
+    )
+    config = run_config(scene)
+    assert config["pallet_size_m"] == [1.2, 0.8]
+    assert config["source"] == "table" and config["level_name"] == "mesa"
+    assert config["auxiliary_table"] == CFG["auxiliary_table"]
+
+
+def main() -> int:
+    tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
+    for test in tests:
+        test()
+        print(f"  ok  {test.__name__}")
+    measure.demo()
+    print(f"{len(tests)} comprobaciones pasadas")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
