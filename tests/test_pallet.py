@@ -30,10 +30,12 @@ from src.cell.scene import (  # noqa: E402
     SOURCE_DECADE,
     SOURCES,
     Level,
+    lane_for,
     levels,
     lighting_for,
     load_configs,
-)
+    parking_grid,
+)  # noqa: E402
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
 from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
@@ -397,54 +399,63 @@ def test_the_m_key_does_not_leave_mujoco_com_spheres_on() -> None:
     assert opt.flags[mujoco.mjtVisFlag.mjVIS_COM] == 0
 
 
-def test_the_table_stages_one_box_at_a_time() -> None:
-    """La mesa prepara UN bulto, y el siguiente entra cuando se llevan el anterior.
+def test_the_feeder_lane_lands_exactly_on_the_table() -> None:
+    """La banda de mesa acaba en el canto de la mesa y entrega a su centro.
 
-    No es una simplificación: es lo único que cabe. La mesa mide 0.72 x 0.68 m útiles y
-    dos `std_m` sólo entran con 80 mm de holgura como mucho; con esa holgura, al extraer
-    uno el que va en la mano barre al vecino y lo tira al suelo (385 mm medidos), y la
-    holgura que haría falta para no tocarlo ya no cabe en la mesa. Con la mesa llena, eso
-    salía como que al brazo se le escurría la caja.
+    Son tres números que tienen que cuadrar entre dos bloques de YAML distintos, y
+    ninguno de los tres avisa si deja de cuadrar:
 
-    Sólo se ve con movimiento real: en fast-forward el brazo teletransporta entre
-    waypoints y no barre nada.
+      - Si la banda acaba ANTES del canto, el cartón cae por el hueco y lo que se mide
+        después es una caja en el suelo.
+      - Si acaba DESPUÉS, la banda atraviesa la mesa.
+      - Si las cotas no coinciden, hay un escalón: `Belt._riding` mira la ALTURA para
+        decidir a quién arrastra, así que con medio centímetro de diferencia la banda
+        deja de empujar justo al llegar a la mesa y el episodio muere en `timeout`.
+
+    Por eso `lane_for` DERIVA el centro de la banda del canto de la mesa en vez de
+    llevarlo escrito: aquí sólo se comprueba que la derivación siga diciendo lo que dice
+    su docstring.
     """
-    from src.cell.table import TableSupply
+    lane = lane_for(CFG, "table")
+    table = CFG["table"]
+    table_x, table_y = (float(v) for v in table["center"])
+    edge = table_x - float(table["size"][0])
 
-    boxes = [
-        SimpleNamespace(index=i, dims_m=dims, package_id=f"b{i}")
-        for i, dims in enumerate([(0.42, 0.30, 0.18), (0.24, 0.18, 0.10),
-                                  (0.55, 0.36, 0.26)])
-    ]
-    puestas: dict[int, tuple[float, float, float]] = {}
-    scene = SimpleNamespace(
-        cfg=CFG, boxes=boxes,
-        level=SimpleNamespace(yaw_jitter_deg=0.0, pos_jitter_m=0.0),
-        rng=np.random.default_rng(0),
-        place_box=lambda index, pos, yaw: puestas.__setitem__(index, pos),
-        settle_until_rest=lambda: None,
-    )
-    supply = TableSupply(scene)
-    supply.stage(scene)
-    assert list(puestas) == [0], f"la mesa debe preparar uno solo: {list(puestas)}"
+    downstream = float(lane["center"][0]) + float(lane["dims"][0]) / 2
+    assert abs(downstream - edge) < 1e-9, f"la banda acaba en {downstream}, el canto en {edge}"
+    assert float(lane["height"]) == float(table["height"]), "escalón entre banda y mesa"
+    assert tuple(lane["station"]) == (table_x, table_y), "no entrega al centro de la mesa"
+    assert float(lane["center"][1]) == table_y, "la banda y la mesa en carriles distintos"
 
-    cfg = CFG["table"]
-    cx, cy = (float(v) for v in cfg["center"])
-    half_x, half_y, _ = (float(v) for v in cfg["size"])
-    for index, (x, y, _z) in puestas.items():
-        length, width, _ = boxes[index].dims_m
-        # Entero dentro de la mesa: uno a medias sobre el canto se cae, y lo que se mide
-        # despues es una caja en el suelo.
-        assert cx - half_x <= x - length / 2 and x + length / 2 <= cx + half_x, index
-        assert cy - half_y <= y - width / 2 and y + width / 2 <= cy + half_y, index
 
-    # El segundo entra al presentarlo, no antes, y en el sitio que dejó el primero.
-    assert supply.present(scene) == "b0"
-    assert list(puestas) == [0], "presentar el que ya está puesto no mueve nada"
-    supply.release(scene)                      # el brazo se lo llevó
-    assert supply.present(scene) == "b1"
-    assert list(puestas) == [0, 1]
-    assert puestas[1][:2] == puestas[0][:2]
+def test_the_black_box_hides_everything_that_waits() -> None:
+    """Los que esperan caben dentro del cerramiento, y no en una fila hasta el infinito.
+
+    El aparcamiento anterior era `x = -3 - i*0.7`: con los treinta bultos del nivel 17
+    son 21 m de cartones saliéndose de la escena. La rejilla se dimensiona con la carga,
+    así que lo que hay que anclar es que el cerramiento la tape ENTERA —si alguien toca
+    `pitch`, `columns` o `margin`, los que esperan aparecen atravesando la pared— y que
+    no invada la banda por la que tienen que salir.
+    """
+    boxes = [SimpleNamespace(index=i, dims_m=(0.55, 0.36, 0.26)) for i in range(30)]
+    for source in ("table", "conveyor"):
+        lane = lane_for(CFG, source)
+        slots = parking_grid(CFG, boxes, lane)
+        assert len(slots) == len(boxes)
+
+        pitch_x, pitch_y = (float(v) for v in CFG["black_box"]["pitch"])
+        assert all(
+            abs(a[0] - b[0]) >= pitch_x - 1e-9 or abs(a[1] - b[1]) >= pitch_y - 1e-9
+            for i, a in enumerate(slots) for b in slots[i + 1:]
+        ), f"{source}: dos bultos esperando en el mismo hueco"
+
+        # Todos aguas arriba de la boca: ninguno aparece ya sobre la banda.
+        mouth = float(lane["center"][0]) - float(lane["dims"][0]) / 2
+        assert max(x for x, _ in slots) < mouth, f"{source}: alguien espera sobre la banda"
+
+        # Y ninguno más lejos de lo que el cerramiento puede tapar.
+        span = max(x for x, _ in slots) - min(x for x, _ in slots)
+        assert span < 6.0, f"{source}: la rejilla se va a {span:.1f} m"
 
 
 def test_depth_fuses_into_the_height_map() -> None:

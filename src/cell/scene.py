@@ -654,7 +654,97 @@ def _stability_beam_xml(cfg: dict) -> str:
     </body>"""
 
 
-def _belt_xml(cfg: dict, simplified: bool) -> str:
+def lane_for(cfg: dict, source: str) -> dict | None:
+    """El carril por el que llegan los bultos, o `None` si la fuente no tiene.
+
+    Mesa y cinta comparten mecánica y se diferencian en dónde ACABA la banda: la de la
+    cinta entrega al brazo y la de la mesa entrega a la mesa. El camión no tiene carril
+    —la carga ya viene apilada en el remolque— y por eso tampoco tiene caja negra.
+    """
+    if source == "conveyor":
+        belt = dict(cfg["conveyor"])
+        belt["station"] = tuple(float(v) for v in belt["station"])
+        return belt
+    if source != "table":
+        return None
+    # La banda de mesa acaba en el canto de la mesa y comparte su carril y su cota, para
+    # que el bulto cruce sin escalón. Su centro se deriva: no hay dos números que cuadrar.
+    table = cfg["table"]
+    feeder = dict(cfg["feeder"])
+    table_x, table_y = (float(v) for v in table["center"])
+    edge = table_x - float(table["size"][0])
+    length = float(feeder["dims"][0])
+    feeder["center"] = (edge - length / 2, table_y)
+    feeder["station"] = (table_x, table_y)       # se entrega al CENTRO de la mesa
+    return feeder
+
+
+def parking_grid(cfg: dict, boxes: list[Box], lane: dict) -> list[tuple[float, float]]:
+    """Dónde espera cada bulto dentro de la caja negra, en rejilla y sin tocarse.
+
+    Antes era una fila —`x = -3 - i*0.7`— que con treinta bultos medía 21 m y se veía
+    salir de la escena. La rejilla ocupa lo mismo en superficie y cabe en un cerramiento.
+    """
+    black = cfg["black_box"]
+    pitch_x, pitch_y = (float(v) for v in black["pitch"])
+    columns = max(1, int(black["columns"]))
+    lane_x = (float(lane["center"][0]) - float(lane["dims"][0]) / 2
+              - float(cfg["elevator"]["depth"]) - float(black["gap"]))
+    lane_y = float(lane["center"][1])
+    slots = []
+    for index in range(len(boxes)):
+        row, column = divmod(index, columns)
+        slots.append((
+            lane_x - pitch_x / 2 - row * pitch_x,
+            lane_y + (column - (columns - 1) / 2) * pitch_y,
+        ))
+    return slots
+
+
+def _black_box_xml(cfg: dict, boxes: list[Box], lane: dict) -> str:
+    """El cerramiento opaco, ajustado a la rejilla de espera que tenga que tapar."""
+    black = cfg["black_box"]
+    slots = parking_grid(cfg, boxes, lane)
+    pitch_x, pitch_y = (float(v) for v in black["pitch"])
+    margin, wall = float(black["margin"]), float(black["wall"])
+    height, rgba = float(black["height"]), " ".join(str(v) for v in black["rgba"])
+
+    xs = [x for x, _ in slots]
+    ys = [y for _, y in slots]
+    x0, x1 = min(xs) - pitch_x / 2 - margin, max(xs) + pitch_x / 2 + margin
+    y0, y1 = min(ys) - pitch_y / 2 - margin, max(ys) + pitch_y / 2 + margin
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    half_x, half_y = (x1 - x0) / 2, (y1 - y0) / 2
+
+    # Cerramiento sin suelo; delante sólo queda el hueco de entrega a la banda.
+    # Una fachada entera abierta dejaba ver los cartones esperando en el suelo.
+    panels = [
+        (cx - half_x - wall, cy, height / 2, wall, half_y + wall, height / 2),   # fondo
+        (cx, cy - half_y - wall, height / 2, half_x, wall, height / 2),          # lateral
+        (cx, cy + half_y + wall, height / 2, half_x, wall, height / 2),          # lateral
+        (cx, cy, height + wall, half_x + wall, half_y + wall, wall),             # techo
+    ]
+    mouth_half = float(lane["dims"][1]) / 2 + 0.02
+    mouth_y = float(lane["center"][1])
+    mouth_bottom = float(lane["height"])
+    mouth_top = mouth_bottom + max(float(box.dims_m[2]) for box in boxes) + 0.05
+    front_x = x1 - wall / 2
+    panels += [
+        (front_x, cy, mouth_bottom / 2, wall / 2, half_y, mouth_bottom / 2),
+        (front_x, cy, (height + mouth_top) / 2, wall / 2, half_y, (height - mouth_top) / 2),
+    ]
+    for low, high in ((y0, mouth_y - mouth_half), (mouth_y + mouth_half, y1)):
+        if high > low:
+            panels.append((front_x, (low + high) / 2, height / 2,
+                           wall / 2, (high - low) / 2, height / 2))
+    return "\n".join(
+        f'    <geom name="black_box_{index}" type="box" pos="{px:.4f} {py:.4f} {pz:.4f}" '
+        f'size="{sx:.4f} {sy:.4f} {sz:.4f}" rgba="{rgba}" contype="0" conaffinity="0"/>'
+        for index, (px, py, pz, sx, sy, sz) in enumerate(panels)
+    )
+
+
+def _belt_xml(cfg: dict, simplified: bool, lane: dict | None = None) -> str:
     """La banda transportadora. La superficie es estática; lo que se mueve es la carga.
 
     MuJoCo no tiene primitiva de cinta. De las dos opciones razonables —una banda con
@@ -665,18 +755,29 @@ def _belt_xml(cfg: dict, simplified: bool) -> str:
 
     La fricción es alta a propósito: es lo que arrastra el cartón sin que patine.
     """
-    belt = cfg["conveyor"]
+    belt = cfg["conveyor"] if lane is None else lane
     x, y = belt["center"]
     length, width = belt["dims"]
     top = belt["height"]
     friction = " ".join(str(value) for value in belt["friction"])
-    deck = (
-        f'<geom name="belt" type="box" pos="{x} {y} {top - 0.02:.4f}" '
-        f'size="{length / 2} {width / 2} 0.02" friction="{friction}" '
-        f'conaffinity="{SOLID}" '
+    # DOS tramos, que es como se monta una línea de verdad: uno sale del ascensor y el
+    # otro entrega. Se tocan exactamente en el centro —no hay junta por la que colarse— y
+    # el arrastre no se entera de que son dos, porque `Belt._drive` mira la ALTURA a la
+    # que va el cartón, no sobre qué geometría. Por eso partirla es gratis aquí y por eso
+    # el bulto también cruza a la mesa sin escalón.
+    half = length / 4
+    decks = [
+        (f'{x - half:.4f}', 'segment_a'),
+        (f'{x + half:.4f}', 'segment_b'),
+    ]
+    deck = "\n".join(
+        f'    <geom name="belt_{name}" type="box" pos="{cx} {y} {top - 0.02:.4f}" '
+        f'size="{half:.4f} {width / 2} 0.02" friction="{friction}" '
+        f'conaffinity="{SOLID}" rgba="{{rgba}}"/>'
+        for cx, name in decks
     )
     if simplified:
-        return f'    {deck}rgba="0.14 0.15 0.17 1"/>'
+        return deck.format(rgba="0.14 0.15 0.17 1") + "\n" + _elevator_xml(cfg, belt)
 
     rollers = "\n".join(
         f'    <geom type="cylinder" pos="{value:.4f} {y} {top - 0.055:.4f}" '
@@ -701,16 +802,64 @@ def _belt_xml(cfg: dict, simplified: bool) -> str:
         f'size="0.004 {width / 2 - 0.02:.4f} 0.0005" material="safety_yellow" '
         'contype="0" conaffinity="0"/>'
     )
-    return f'    {deck}rgba="0 0 0 0"/>\n' + "\n".join(
-        [
-            f'    <geom type="box" pos="{x} {y} {top - 0.02:.4f}" '
-            f'size="{length / 2} {width / 2} 0.019" material="belt" contype="0" conaffinity="0"/>',
-            rollers,
-            sides,
-            legs,
-            marker,
-        ]
+    # La banda visible SÍ va partida y con su hueco: es lo que hace que se lean dos
+    # tramos y no una cinta larga. El hueco es sólo visual —la superficie de arrastre de
+    # arriba es continua—, así que no hay por dónde caerse.
+    seam = 0.012
+    surfaces = "\n".join(
+        f'    <geom type="box" pos="{cx} {y} {top - 0.02:.4f}" '
+        f'size="{half - seam:.4f} {width / 2} 0.019" material="belt" '
+        'contype="0" conaffinity="0"/>'
+        for cx, _ in decks
     )
+    transfer = "\n".join([
+        f'    <geom type="cylinder" pos="{x + dx:.4f} {y} {top - 0.028:.4f}" '
+        f'quat="0.7071 0.7071 0 0" size="0.018 {width / 2 - 0.01:.4f}" material="roller" '
+        'contype="0" conaffinity="0"/>'
+        for dx in (-0.020, 0.020)
+    ])
+    return deck.format(rgba="0 0 0 0") + "\n" + "\n".join(
+        [surfaces, transfer, rollers, sides, legs, marker,
+         _elevator_xml(cfg, belt)]
+    )
+
+
+def _elevator_xml(cfg: dict, lane: dict) -> str:
+    """Plataforma móvil antes de la banda; `Belt` manda su altura y el contacto eleva la caja."""
+    tower = cfg["elevator"]
+    length = float(lane["dims"][0])
+    top = float(tower["lower_height"])
+    depth = float(tower["depth"]) / 2
+    # El mismo ancho evita un cambio lateral de apoyo al cruzar a la cinta.
+    platform_width = float(lane["dims"][1])
+    half_w = platform_width / 2 + float(tower["side"])
+    # El canto de salida toca la banda. Debajo de la plataforma no hay banda fija:
+    # de lo contrario la caja chocaría con ella al subir desde el suelo.
+    x = float(lane["center"][0]) - length / 2 - depth
+    y = float(lane["center"][1])
+    height = float(tower["height"])
+    rgba = " ".join(str(v) for v in tower["rgba"])
+    friction = " ".join(str(value) for value in lane["friction"])
+    trim = 'contype="0" conaffinity="0"'
+    parts = [
+        f'    <body name="elevator" mocap="true" pos="{x:.4f} {y:.4f} {top - 0.012:.4f}">'
+        f'<geom name="elevator_platform" type="box" size="{depth:.4f} {platform_width / 2:.4f} 0.012" '
+        f'material="roller" friction="{friction}" solref="0.004 1" conaffinity="{SOLID}"/></body>',
+        f'    <geom name="elevator_header" type="box" pos="{x:.4f} {y:.4f} {height:.4f}" '
+        f'size="{depth:.4f} {half_w:.4f} 0.05" material="safety_yellow" {trim}/>',
+    ]
+    parts += [
+        f'    <geom type="box" pos="{x + dx:.4f} {y + dy:.4f} {height / 2:.4f}" '
+        f'size="0.025 0.025 {height / 2:.4f}" rgba="{rgba}" {trim}/>'
+        for dx in (-depth + 0.025, depth - 0.025)
+        for dy in (-half_w + 0.025, half_w - 0.025)
+    ]
+    parts += [
+        f'    <geom type="box" pos="{x:.4f} {y + side * half_w:.4f} {height / 2:.4f}" '
+        f'size="0.025 0.02 {height / 2:.4f}" material="roller" {trim}/>'
+        for side in (-1, 1)
+    ]
+    return "\n".join(parts)
 
 
 def _truck_xml(cfg: dict, simplified: bool) -> str:
@@ -928,11 +1077,16 @@ def build_mjcf(
     )
     welds = "\n      ".join(_weld_xml(box) for box in boxes if box.index != held_index)
 
+    # Mesa y cinta cuelgan de un carril que sale de la caja negra; el camión no, porque
+    # su carga ya viene apilada en el remolque. Ver `lane_for`.
+    lane = lane_for(cfg, level.source)
     source_fixture = {
-        "table": lambda: add_table(cfg["table"]),
-        "conveyor": lambda: _belt_xml(cfg, simplified),
+        "table": lambda: add_table(cfg["table"]) + "\n" + _belt_xml(cfg, simplified, lane),
+        "conveyor": lambda: _belt_xml(cfg, simplified, lane),
         "truck": lambda: _truck_xml(cfg, simplified),
     }[level.source]()
+    if lane is not None:
+        source_fixture += "\n" + _black_box_xml(cfg, boxes, lane)
     auxiliary_table = add_table(cfg["auxiliary_table"], name="auxiliary_table")
 
     meshes = (
@@ -1040,6 +1194,12 @@ class PalletScene:
         self.simplified = simplified
         self.held: HeldPackage | None = None
         self.rng = np.random.default_rng(seed)
+        # La rejilla de espera dentro de la caja negra, la MISMA que dimensionó el
+        # cerramiento al construir el MJCF. Se calcula una vez: si `park_box` la
+        # recalculara por su cuenta y los dos no coincidieran, los que esperan
+        # aparecerían atravesando la pared y no se vería por qué.
+        lane = lane_for(cfg, level.source)
+        self._parking = None if lane is None else parking_grid(cfg, boxes, lane)
         # Tiempo SIMULADO desde que arrancó el episodio. Es el que va a `events.ts`, no
         # el de reloj: así dos ejecuciones de la misma semilla dan la misma línea
         # temporal por rápida que sea la máquina.
@@ -1107,6 +1267,7 @@ class PalletScene:
         arm = np.asarray(self.data.qpos[self.arm_qpos]).copy()
         pallet_qpos = np.asarray(self.data.qpos[self.pallet_qpos]).copy()
         pallet_qvel = np.asarray(self.data.qvel[self.pallet_dofs]).copy()
+        mocap_pos, mocap_quat = self.data.mocap_pos.copy(), self.data.mocap_quat.copy()
         poses = {box.index: self.box_pose(box.index) for box in self.boxes}
         pallet_locked = (
             bool(self.data.eq_active[self.pallet_weld]) if self.pallet_weld >= 0 else True
@@ -1120,6 +1281,8 @@ class PalletScene:
         self.data.ctrl[:] = arm
         self.data.qpos[self.pallet_qpos] = pallet_qpos
         self.data.qvel[self.pallet_dofs] = pallet_qvel
+        self.data.mocap_pos[:] = mocap_pos
+        self.data.mocap_quat[:] = mocap_quat
         if self.pallet_weld >= 0:
             self.data.eq_active[self.pallet_weld] = pallet_locked
         for box in self.boxes:
@@ -1182,9 +1345,19 @@ class PalletScene:
         self.mujoco.mj_forward(self.model, self.data)
 
     def park_box(self, index: int) -> None:
-        """Deja una caja fuera de escena, donde no estorbe ni toque nada."""
+        """Deja una caja esperando DENTRO de la caja negra, en su hueco de la rejilla.
+
+        Antes era una fila que se iba de la escena —21 m con treinta bultos—. Ahora los
+        que esperan están donde dice la ficción: fuera de la vista, no en el infinito.
+        Sin carril —el camión— se conserva la fila de siempre, que allí no se ve porque
+        la carga entera está en el remolque desde el principio.
+        """
         height = self.boxes[index].dims_m[2]
-        self.place_box(index, (-3.0 - index * 0.7, 0.0, height / 2 + 0.002))
+        if self._parking is None:
+            self.place_box(index, (-3.0 - index * 0.7, 0.0, height / 2 + 0.002))
+            return
+        x, y = self._parking[index]
+        self.place_box(index, (x, y, height / 2 + 0.002))
 
     # ── física ───────────────────────────────────────────────────────────────
 

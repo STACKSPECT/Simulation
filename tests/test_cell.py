@@ -145,26 +145,78 @@ def test_stability_test_reuses_the_loaded_pallet_and_restores_it() -> None:
 
 
 def test_belt_moves_the_package_through_physics() -> None:
-    scene = build_scene(level_id=21, seed=4, simplified=True)
-    try:
-        supply = Belt(scene)
-        supply.stage(scene)
-        positions: list[float] = []
-        original_step = scene.step
+    """Carga abajo, sube por contacto y cruza los dos tramos en ambos modos gráficos."""
+    for level_id in (11, 21):
+        for simplified in (True, False):
+            scene = build_scene(level_id=level_id, seed=4, simplified=simplified)
+            try:
+                supply = make_supply(scene)
+                supply.stage(scene)
+                model = scene.model
+                first, second = (model.geom(name) for name in ("belt_segment_a", "belt_segment_b"))
+                seam = float(first.pos[0] + first.size[0])
+                assert np.isclose(seam, second.pos[0] - second.size[0])
+                assert np.isclose(first.pos[2] + first.size[2], supply.surface_z)
+                assert np.isclose(second.pos[2] + second.size[2], supply.surface_z)
+                platform = model.geom("elevator_platform")
+                assert platform.contype != 0 and platform.conaffinity != 0
+                platform_pos = scene.data.geom_xpos[platform.id].copy()
+                assert np.isclose(platform_pos[2] + platform.size[2], supply.lower_height)
+                assert np.isclose(platform_pos[0] + platform.size[0], first.pos[0] - first.size[0])
+                header = model.geom("elevator_header")
+                assert header.rgba[3] == 1
+                front = model.geom("black_box_4")
+                assert front.rgba[3] == 1
+                assert np.isclose(front.pos[2] + front.size[2], supply.surface_z)
+                assert front.pos[0] > max(scene.box_pose(box.index)[0][0] for box in scene.boxes)
+                positions: list[float] = []
+                rising: list[tuple[float, float]] = []
+                loads = []
+                original_step = scene.step
+                original_place = scene.place_box
 
-        def observe(seconds: float) -> None:
-            original_step(seconds)
-            if supply.current is not None:
-                positions.append(float(scene.box_pose(supply.current)[0][0]))
+                def load(index, position, yaw=0.0):
+                    loads.append((index, position))
+                    original_place(index, position, yaw)
 
-        scene.step = observe
-        package_id = supply.present(scene)
-        assert package_id is not None
-        assert len({round(value, 3) for value in positions}) > 10
-        assert positions[-1] - positions[0] > 0.4
-        assert abs(positions[-1] - scene.cfg["conveyor"]["station"][0]) < 0.04
-    finally:
-        scene.close()
+                scene.place_box = load
+
+                def observe(seconds: float) -> None:
+                    original_step(seconds)
+                    if supply.current is not None:
+                        pos = scene.box_pose(supply.current)[0]
+                        positions.append(float(pos[0]))
+                        if abs(pos[0] - supply.entry_x) < 0.02:
+                            support_z = scene.data.geom_xpos[platform.id, 2] + platform.size[2]
+                            rising.append((float(pos[2]), float(support_z)))
+
+                scene.step = observe
+                package_id = supply.present(scene)
+                assert package_id is not None
+                assert positions[0] < seam < positions[-1]
+                assert len({round(value, 3) for value in positions if value < seam}) > 10
+                assert len({round(value, 3) for value in positions if value > seam}) > 10
+                assert abs(positions[-1] - supply.station_x) < 0.04
+                assert len(loads) == 1, "el ascensor no debe reescribir la pose del paquete"
+                half_box = scene.boxes[0].dims_m[2] / 2
+                assert np.isclose(loads[0][1][2], supply.lower_height + half_box + 0.002)
+                heights = np.array(rising)
+                assert heights[-1, 0] - heights[0, 0] > 0.50
+                assert len(set(np.round(heights[:, 0], 3))) > 100
+                assert np.max(np.abs(heights[:, 0] - half_box - heights[:, 1])) < 0.01
+                before = scene.data.mocap_pos.copy()
+                scene.rebuild(None)
+                assert np.allclose(scene.data.mocap_pos, before), "sellar no reinicia el ascensor"
+                # El siguiente ciclo empieza con la plataforma arriba y debe volver a cargar abajo.
+                supply.release(scene)
+                scene.park_box(0)
+                loads.clear()
+                assert supply.present(scene) is not None
+                assert len(loads) == 1
+                half_box = scene.boxes[loads[0][0]].dims_m[2] / 2
+                assert np.isclose(loads[0][1][2], supply.lower_height + half_box + 0.002)
+            finally:
+                scene.close()
 
 
 def _assert_delivered_at_rest(scene, supply, *, window_s: float = 0.5) -> None:
@@ -246,18 +298,23 @@ def test_the_belt_delivers_every_package_fully_supported() -> None:
 
 
 def test_belt_times_out_if_the_package_never_settles() -> None:
-    """Si llega y no se asienta, es `timeout`, no una entrega con pose caducada."""
-    scene = build_scene(level_id=21, seed=1, simplified=True)
-    try:
-        supply = Belt(scene)
-        supply.timeout_s = 8.0
-        supply._resting = lambda _scene, _index, previous, _dt: (False, previous)
-        supply.stage(scene)
-        assert supply.present(scene) is None
-        assert supply.jammed
-        assert supply.current is None
-    finally:
-        scene.close()
+    """El mismo plazo cubre el ascensor y el reposo final de la cinta."""
+    for timeout in (0.05, 15.0):
+        scene = build_scene(level_id=21, seed=1, simplified=True)
+        try:
+            supply = Belt(scene)
+            supply.timeout_s = timeout
+            supply._resting = lambda _scene, _index, previous, _dt: (False, previous)
+            supply.stage(scene)
+            assert supply.present(scene) is None
+            assert supply.jammed
+            assert supply.current is None
+            if timeout > 1.0:
+                assert abs(scene.box_pose(0)[0][0] - supply.station_x) < 0.04
+            else:
+                assert scene.box_pose(0)[0][2] < supply.surface_z
+        finally:
+            scene.close()
 
 
 class _CountingViewer:
@@ -319,21 +376,19 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
             supply.stage(scene)
             arm = ArmController(scene)
             targets = []
-            if scene.level.source == "conveyor":
+            if scene.level.source in ("conveyor", "table"):
+                # Las dos entregan en una ESTACIÓN fija —bajo el brazo la cinta, en el
+                # centro de la mesa la banda de mesa— y los que esperan están dentro de
+                # la caja negra, a x = -2 y más allá. Pedirle al brazo que llegue hasta
+                # ahí no prueba nada sobre su alcance: el bulto sale de ahí en la banda.
                 station_x, station_y = scene.station
                 for box in scene.boxes:
                     targets.append((station_x, station_y,
                                     scene.surface_z + box.dims_m[2] + arm.cup_gap, 0.0))
             else:
-                # Sólo los bultos que están PUESTOS. La mesa no da para todos —ocho
-                # sorteados suman más área que ella— y los que no caben esperan
-                # aparcados fuera de la escena, a x = -3 y más allá: pedirle al brazo que
-                # llegue hasta ahí no prueba nada sobre su alcance. Entran a la mesa
-                # cuando queda hueco, y entonces sí caen dentro de esta envolvente.
-                staged = getattr(supply, "staged", -1)
+                # El camión presenta la carga entera en la bahía, así que aquí sí hay que
+                # poder llegar a todas.
                 for box in scene.boxes:
-                    if staged != -1 and box.index != staged:
-                        continue
                     top = scene.box_top_center(box.index)
                     targets.append((float(top[0]), float(top[1]),
                                     float(top[2]) + arm.cup_gap, scene.box_yaw(box.index)))
@@ -382,8 +437,14 @@ def test_joint_targets_use_the_nearest_equivalent_angle() -> None:
         scene.close()
 
 
-def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
-    """Regresión del ciclo que tardaba 75,9 s por parar después de cada waypoint."""
+def test_level_11_physical_cycle_stays_within_its_time_budget() -> None:
+    """Regresión del ciclo que paraba después de cada waypoint.
+
+    El nivel 11 pasó de 70,4 s con banda a 99,0 s con ascensor (semilla 1, speed=1):
+    cuatro subidas de 2,7 s, tres bajadas y el recorrido extra antes de la cinta.
+    115 s conserva unos 16 s de margen; el antiguo coste de parar en cada waypoint
+    añadiría unos 25 s y seguiría superándolo.
+    """
     scene = build_scene(level_id=11, seed=1, simplified=True)
     try:
         episode = run_episode(
@@ -395,7 +456,7 @@ def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
             speed=1.0,
         )
         assert episode.success, episode.failure
-        assert episode.duration_s < 50.0
+        assert episode.duration_s < 115.0, episode.duration_s
     finally:
         scene.close()
 

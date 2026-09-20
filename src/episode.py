@@ -149,23 +149,51 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
             _record(episode, scene, arm, attempt, 0.0, sink, planner, verbose)
             break
 
-        scene.episode_plans[attempt] = plan
+        # Un hueco que el brazo no alcanza NO cierra el episodio a la primera. El mapa de
+        # alturas no ha cambiado —no se ha soltado nada—, así que replanificar devolvería
+        # el mismo hueco: lo que se hace es bajar por la cola de repuesto que
+        # `ScorePlanner.choose` dejó preparada, ya ordenada por score y con los vecinos
+        # filtrados. Hay regiones enteras que el brazo no sostiene y que el mapa de
+        # alturas no puede ver —ver `heuristic.reach_min`—, y la única forma de saber que
+        # se ha caído en una es intentarlo.
+        retries = int(scene.cfg["episode"].get("place_retries", 0))
+        first_try = True
+        while True:
+            scene.episode_plans[attempt] = plan
+            _event(
+                episode, scene, sink, "plan", box,
+                layer=plan.layer,
+                slot=plan.slot,
+                score=round(plan.score, 4),
+                breakdown=plan.breakdown,
+                heightmap_top_mm=round(heightmap.top * 1000, 1),
+                # Cuánto del palé vieron las cámaras. Con el oráculo es 1.0 por definición.
+                observed_pct=round(heightmap.observed_ratio, 4),
+                # Cuántos huecos se descartaron antes de éste. Sobra en el payload, y es
+                # lo que deja ver que un nivel se pelea con el alcance sin salir en rojo.
+                retry=0 if first_try else retries,
+            )
+
+            if first_try:
+                if episode.plans and plan.layer > episode.plans[-1].layer:
+                    _shoot(episode, scene, arm, attempt - 1, sink)
+                first_try = False
+
+            failure, drift = _place(
+                arm, scene, box, spec, plan, episode.attempted, heightmap
+            )
+            # `is_holding` es lo que hace esto seguro: `_place` también devuelve
+            # `ik_unreachable` al RETIRARSE, con la caja ya soltada en el palé, y
+            # reintentar ahí colocaría un bulto que ya no está en la mano.
+            if failure != "ik_unreachable" or not arm.is_holding() or retries <= 0:
+                break
+            alternative = getattr(planner, "alternative", lambda: None)()
+            if alternative is None:
+                break
+            retries -= 1
+            plan = alternative
+
         episode.plans.append(plan)
-        _event(
-            episode, scene, sink, "plan", box,
-            layer=plan.layer,
-            slot=plan.slot,
-            score=round(plan.score, 4),
-            breakdown=plan.breakdown,
-            heightmap_top_mm=round(heightmap.top * 1000, 1),
-            # Cuánto del palé vieron las cámaras. Con el oráculo es 1.0 por definición.
-            observed_pct=round(heightmap.observed_ratio, 4),
-        )
-
-        if len(episode.plans) > 1 and plan.layer > episode.plans[-2].layer:
-            _shoot(episode, scene, arm, attempt - 1, sink)
-
-        failure, drift = _place(arm, scene, box, spec, plan, episode.attempted, heightmap)
         if failure and arm.is_holding():
             _return_to_source(arm, scene, box, observation)
         supply.release(scene)

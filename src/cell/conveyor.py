@@ -10,8 +10,7 @@ La fuente de suministro: de dónde sale el paquete que el brazo tiene que coger.
 La cabecera original de este fichero describía una sola cosa, la cinta. Aquí hay tres, y
 son tres TAREAS distintas, no tres formas de hacer la misma:
 
-    `table`     los bultos esperan colocados en la mesa. Es el caso base: la fuente no
-                se mueve y el único problema es paletizar.
+    `table`     un ascensor y una banda entregan los bultos en el centro de la mesa.
     `conveyor`  una banda entrega uno cada vez, singulado, siempre por el mismo sitio.
                 Se para para que el robot coja. Puede atascarse.
     `truck`     el remolque entrega la carga ENTERA de golpe, apilada en columnas. El
@@ -141,42 +140,75 @@ class Belt(_BaseSupply):
     verdad: un cartón que vuelca, se sale de la banda o no se asienta deja de contar
     como entregado, y la espera expira.
 
-    El paquete se inyecta en la ENTRADA de la banda, no en la estación, y hace el
-    trayecto entero: llega con la pose que traiga, torcida incluida. Inyectar en la
-    entrada es modelar el alimentador de aguas arriba, que es lo que hay antes de la
-    cinta en una planta de verdad.
+    El paquete se carga abajo en el ascensor. Su plataforma mocap sube por una rampa
+    suave y el contacto eleva el cartón; sólo después arranca la banda. La carga inicial
+    es la única escritura de pose: desde ahí llega por física, torcida incluida.
     """
 
     def __init__(self, scene):
         super().__init__(scene)
-        cfg = scene.cfg["conveyor"]
+        # El carril lo decide la FUENTE del nivel, no esta clase: la cinta entrega bajo
+        # el brazo y la mesa entrega a la mesa, y por lo demás son la misma banda. Ver
+        # `scene.lane_for` y `src/cell/table.py`.
+        from src.cell.scene import lane_for
+
+        cfg = lane_for(scene.cfg, scene.level.source) or scene.cfg["conveyor"]
         self.speed = float(cfg["speed"])
         self.station_x, self.station_y = (float(v) for v in cfg["station"])
         self.tol = float(cfg["station_tol"])
         self.timeout_s = float(cfg["timeout_s"])
         self.surface_z = float(cfg["height"])
         length = float(cfg["dims"][0])
-        self.entry_x = float(cfg["center"][0]) - length / 2 + 0.12
+        self.entry_x = float(cfg["center"][0]) - length / 2 - float(scene.cfg["elevator"]["depth"]) / 2
+        self.lower_height = float(scene.cfg["elevator"]["lower_height"])
+        self.lift_speed = float(scene.cfg["elevator"]["speed"])
         self.running = False
 
     def stage(self, scene) -> None:
-        """La banda empieza vacía: los paquetes están aguas arriba, fuera de escena."""
+        """La línea empieza vacía: los paquetes esperan dentro de la caja negra."""
         for box in scene.boxes:
             scene.park_box(box.index)
         scene.settle(0.1)
 
-    def _inject(self, scene, index: int) -> None:
-        """Deja el siguiente cartón en la ENTRADA de la banda, con su desvío."""
+    def _move_elevator(self, scene, top: float, deadline: float) -> bool:
+        """Mueve el soporte; la caja sube por contacto, sin escribir su pose ni velocidad."""
+        mocap = int(scene.model.body_mocapid[scene.model.body("elevator").id])
+        half_height = float(scene.model.geom("elevator_platform").size[2])
+        start = float(scene.data.mocap_pos[mocap, 2])
+        distance = top - half_height - start
+        step = float(scene.model.opt.timestep)
+        # Curva suave: velocidad cero en los extremos y pico igual a la consigna.
+        ticks = max(1, int(np.ceil(1.5 * abs(distance) / self.lift_speed / step)))
+        for tick in range(1, ticks + 1):
+            if scene.clock >= deadline:
+                return False
+            fraction = tick / ticks
+            scene.data.mocap_pos[mocap, 2] = start + distance * fraction**2 * (3 - 2 * fraction)
+            scene.step(step)
+        return True
+
+    def _inject(self, scene, index: int, deadline: float) -> bool:
+        """Carga abajo, eleva por contacto y entrega a la banda a la misma cota."""
+        if not self._move_elevator(scene, self.lower_height, deadline):
+            return False
         box = scene.boxes[index]
         jitter = scene.level.pos_jitter_m
         yaw = np.radians(scene.level.yaw_jitter_deg) * scene.rng.uniform(-1.0, 1.0)
         offset = scene.rng.uniform(-jitter, jitter) if jitter > 0 else 0.0
         scene.place_box(
             index,
-            (self.entry_x, self.station_y + offset, self.surface_z + box.dims_m[2] / 2 + 0.002),
+            (self.entry_x, self.station_y + offset, self.lower_height + box.dims_m[2] / 2 + 0.002),
             yaw,
         )
+        if scene.clock + 0.15 > deadline:
+            return False
         scene.settle(0.15)
+        if not self._move_elevator(scene, self.surface_z, deadline):
+            return False
+        if scene.clock + 0.15 > deadline:
+            return False
+        scene.settle(0.15)
+        return scene.clock < deadline and self._riding(scene, index)
 
     def _riding(self, scene, index: int) -> bool:
         """Si ese cartón va montado en la banda ahora mismo."""
@@ -253,10 +285,12 @@ class Belt(_BaseSupply):
             return None
         index = self.pending[0]
         self.current = index
-        self._inject(scene, index)
+        deadline = scene.clock + self.timeout_s
+        if not self._inject(scene, index, deadline):
+            self._fail_delivery(scene)
+            return None
 
         self.running = True
-        deadline = scene.clock + self.timeout_s
         body = scene.body_id(index)
         step = scene.model.opt.timestep
         while scene.clock < deadline:

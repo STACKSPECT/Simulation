@@ -55,6 +55,7 @@ from placing import (
     PalletState,
     PlacementPlanner,
     ScoringConfig,
+    ranked_placements,
     reject_summary,
 )
 from placing.scoring import pick_scored_index
@@ -118,6 +119,8 @@ class ScorePlanner:
         self.state = self._empty_state
         self._levels: list[float] = []
         self.last_reject: dict[str, int] | None = None
+        # Huecos de repuesto del bulto que se está colocando ahora. Ver `alternative`.
+        self._retries: list[PlacementPlan] = []
 
     # ── el contrato ──────────────────────────────────────────────────────────
 
@@ -148,19 +151,39 @@ class ScorePlanner:
             # `{}` no es lo mismo que "todos rechazados": significa que no se generó ni
             # un candidato, o sea que la caja no cabe ni en un palé vacío.
             self.last_reject = reject_summary(result.batch)
+            self._retries = []
             return None
 
         self.last_reject = None
-        best = result.best
-        layer = self._layer(best.z_base)
+        # La cola de repuesto para ESTE bulto. `ranked_placements` separa los huecos
+        # `min_separation` entre sí a propósito: dos celdas vecinas puntúan casi igual, y
+        # reintentar un centímetro más allá vuelve a fallar exactamente igual.
+        self._retries = [
+            self._plan_from(placement, result)
+            for placement in ranked_placements(result, box)[1:]
+        ]
+        return self._plan_from(result.best, result)
+
+    def alternative(self) -> PlacementPlan | None:
+        """El siguiente hueco de la cola, cuando el brazo no pudo con el anterior.
+
+        NO se replanifica, y ésa es la razón de que la cola se guarde: no se llegó a
+        soltar nada, así que el mapa de alturas es el mismo y `choose` devolvería el
+        mismo hueco y el mismo fallo. Lo que ha cambiado no está en el mapa —está en que
+        ese hueco ya se sabe que el brazo no lo alcanza—, y eso el mapa no puede verlo.
+        """
+        return self._retries.pop(0) if self._retries else None
+
+    def _plan_from(self, placement, result) -> PlacementPlan:
+        layer = self._layer(placement.z_base)
         return PlacementPlan(
-            position=np.array([best.x, best.y, best.z]),    # `z` ya es el centro
-            yaw=float(np.deg2rad(best.yaw)),                # traducción 1
+            position=np.array([placement.x, placement.y, placement.z]),  # `z` es el centro
+            yaw=float(np.deg2rad(placement.yaw)),           # traducción 1
             layer=layer,
             slot=self._slot(result, layer),                 # traducción 4
-            score=float(best.score),
-            predicted_support=float(best.support_ratio),
-            breakdown={name: float(value) for name, value in best.metrics.items()},
+            score=float(placement.score),
+            predicted_support=float(placement.support_ratio),
+            breakdown={name: float(value) for name, value in placement.metrics.items()},
         )
 
     # ── las extensiones que usa el director ──────────────────────────────────

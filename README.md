@@ -42,6 +42,11 @@ semilla 1: 4/4 · ÉXITO
 
 ---
 
+Table and conveyor levels feed packages across two adjoining conveyor sections from an
+opaque store. Each package loads onto the elevator near the floor, rises on its moving
+platform through physical contact, and travels along both belts to the pickup station.
+The elevator lowers empty before loading the next package.
+
 ## The loop
 
 One package, start to finish — also the order the modules are called in. The objects on the

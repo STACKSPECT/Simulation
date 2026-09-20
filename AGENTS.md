@@ -290,11 +290,42 @@ Tres avisos:
 
 ### Las fuentes
 
-`cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. La
-mesa deja los bultos preparados y no mueve nada. La cinta avanza físicamente hasta la
-estación y se para. El camión presenta la carga completa y elige siempre la caja más
-alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
-encima de la fuente.
+`cell.conveyor.Supply` expone `present()` y `release()` para tres implementaciones. El
+camión presenta la carga completa y elige siempre la caja más alta, la única que no
+sostiene otra. **La mesa y la cinta son la MISMA banda**, y lo único que las distingue es
+dónde acaba el carril: `scene.lane_for` se lo da a cada una, y por eso `TableSupply` es un
+`Belt` sin cuerpo. `release()` se llama cuando la mano ya no está encima de la fuente.
+
+**Los bultos salen de una caja negra, y eso no es decorado.** Los que esperan se aparcaban
+en fila —`x = -3 - i*0.7`, o sea 21 m con los treinta del nivel 17— y se veían salir de la
+escena hacia el infinito. Ahora esperan en rejilla dentro de un cerramiento opaco que se
+dimensiona solo con la carga (`scene.parking_grid` calcula la rejilla y el cerramiento se
+ajusta a ella: son la misma cuenta a propósito, porque si cada uno la hiciera por su lado
+los bultos aparecerían atravesando la pared). Treinta bultos ocupan ahora 3,00 m en vez de
+21. Es además lo que la ficción dice: el sistema no sabe lo que viene.
+
+**La banda tiene dos tramos físicos contiguos y un ascensor antes de la entrada.**
+`Belt` carga cada caja abajo, eleva la plataforma mocap por una rampa suave y sólo
+entonces arranca la cinta. La caja sube por contacto: no se reescribe su pose durante
+el trayecto. El ascensor baja vacío antes de cargar la siguiente y su posición sobrevive
+a `rebuild()`. El plazo de entrega incluye bajada, subida, transporte y reposo; un fallo
+sigue siendo `timeout`. La prueba de transporte en `tests/test_cell.py` comprueba todo
+el recorrido y dos entregas consecutivas, con ambos modos gráficos y ambas fuentes.
+
+Tres cosas de la banda de mesa que no se deducen leyendo el código:
+
+- **Acaba en el canto de la mesa y comparte su cota**, las dos a 0.58. `Belt._riding` mira
+  la ALTURA para decidir a quién arrastra, así que la banda sigue empujando ya sobre la
+  mesa y para el bulto en su centro. Medio centímetro de escalón y deja de empujar justo
+  al llegar: el episodio muere en `timeout` y no se ve por qué. Hay un test sin simulador
+  que ancla los tres números.
+- **El centro de la banda se DERIVA del canto de la mesa**, no va escrito. Dos números que
+  hay que cuadrar a mano acaban descuadrados.
+- **Cuesta tiempo simulado**: el nivel 11 pasó de 70,4 s sólo con banda a 99,0 s con
+  ascensor (semilla 1, `speed=1`). La subida de 0,54 m tarda 2,7 s y la bajada vacía,
+  otros 2,7 s; también se añade recorrido horizontal antes de la cinta. La prueba del
+  ciclo deja 115 s de presupuesto. La fuente del nivel 17 entrega sus treinta paquetes
+  en 424,4 s sin maniobras del brazo: ese tiempo también cuenta en `max_duration_s`.
 
 Además de la fuente, **los doce niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
@@ -372,12 +403,18 @@ rojo ahí es el resultado del experimento, no una configuración rota — **no l
 bajándoles el número de bultos.** Si alguna vez salen verdes sin que nadie los toque, eso
 es la noticia: algo mejoró de verdad.
 
-Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6:
+Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6, **antes
+del ascensor físico**. Su tiempo adicional puede cambiar la estabilidad de la pila:
 
 | nivel | bultos | media colocada | cómo se rompe |
 |---|---|---|---|
-| 16 | 20 | 6,7 | 3/6 se queda sin hueco, 3/6 `ik_unreachable` |
-| 17 | 30 | 6,0 | 3/6 deriva al soltar, 2/6 `ik_unreachable`, 1/6 `stack_collapse` |
+| 16 | 20 | 10,3 | 6/6 se queda sin hueco |
+| 17 | 30 | 13,7 | 3/6 deriva al soltar, 1/6 `stack_collapse`, y **2/6 lo completan** |
+
+Los números son de DESPUÉS de encender el filtro de alcance y el reintento de hueco: antes
+eran 6,7 y 6,0, y la mitad de los fallos eran `ik_unreachable`. Ya no queda ninguno, así
+que lo que miden ahora es lo que se quería medir —la decisión— y no la envolvente del
+brazo.
 
 **Se rompen por motivos distintos y sus números no se suman.** El 16 falla PLANIFICANDO:
 veinte bultos del catálogo entero son el 85 % de la envolvente geométrica —los verdes se

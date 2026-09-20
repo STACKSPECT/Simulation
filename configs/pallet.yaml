@@ -386,12 +386,18 @@ levels:
   # ── LA LÍNEA BASE, PARA QUE HAYA CONTRA QUÉ MEDIR ───────────────────────────
   #
   # `ScorePlanner` con el oráculo de visión y de mapa, semillas 1-6, `--no-telemetry`.
+  # Referencia ANTERIOR al ascensor físico: el tiempo adicional de suministro puede
+  # cambiar la estabilidad de la pila; no es una medición del ciclo nuevo.
   # Éstos son los números que una política tiene que batir; si alguien toca los pesos de
   # `heuristic`, se repiten y se actualizan aquí.
   #
-  #   nivel 16   media 6,7 de 20    3/6 se quedan sin hueco, 3/6 `ik_unreachable`
-  #   nivel 17   media 6,0 de 30    3/6 por deriva al soltar, 2/6 `ik_unreachable`,
-  #                                 1/6 `stack_collapse`
+  #   nivel 16   media 10,3 de 20   6/6 se quedan sin hueco
+  #   nivel 17   media 13,7 de 30   3/6 por deriva al soltar, 1/6 `stack_collapse`,
+  #                                 y 2/6 lo completan entero
+  #
+  # Medidos con el filtro de alcance encendido y `place_retries` a 2. Antes eran 6,7 y
+  # 6,0, y la mitad de los fallos eran `ik_unreachable`: ya no queda ninguno en estos dos
+  # niveles, así que lo que miden es la DECISIÓN y no la envolvente del brazo.
   #
   # Y el desglose de por qué el 16 se queda sin hueco, sumando las ventanas rechazadas de
   # las tres semillas que llegan a ese punto —25.843 `com_unsupported`, 7.267
@@ -521,11 +527,40 @@ heuristic:
   # `ik_unreachable`), así que se queda apagado: `reach_max: 0` desactiva el filtro y
   # deja `reachability` neutro. Con él apagado, los niveles van como dice el
   # README. Cuando se mida bien, se enciende poniendo `robot_xy` y `reach_max`.
-  # robot_xy: [0.60, -0.72]      # el pedestal, de `scene.yaml: robot.base_pos`
-  reach_max: 0.0                 # 0 = filtro apagado
-  reach_min: 0.0
+  #
+  # ── YA ESTÁ MEDIDO, Y ERA UN ANILLO INTERIOR ──────────────────────────────────
+  # El barrido bueno es el de arriba repetido COMO LO HACE `_place`: con el cartón
+  # sellado, bajando por la cota de tránsito y con `approach=True`, y —esto es lo que
+  # faltaba— pidiendo el TCP a la altura que le toca A ESE BULTO,
+  # `deck + alto + cup_gap + drop_clearance`. Barrer un z fijo para todos los tipos mete
+  # las cajas altas dentro de la cubierta y por eso el intento anterior salía 0/32: no
+  # medía alcance, medía una pose que no existe.
+  #
+  # Con la pose correcta, 30 poses repartidas por el palé y el bulto en la mano:
+  #
+  #   carga              alto   z del TCP   alcanzable
+  #   book_s / tray_s    0.10     0.247      28/30   falla sólo a d = 0.41 m
+  #   std_m              0.18     0.327      30/30
+  #   cube_m             0.20     0.347      30/30
+  #
+  # O sea: no es un límite de lejanía, es un ANILLO INTERIOR pegado al pedestal, y sólo
+  # lo pisan los bultos bajos porque son los únicos que depositan tan abajo. Encaja con
+  # los dos fallos trazados —(0.62, -0.30) a 0.42 m y (0.57, -0.29) a 0.43 m— y con la
+  # nota vieja de la mano vacía, que ya decía «primer fallo a 0.373 m, todas buenas desde
+  # 0.447 m». `reach_min` es exactamente eso y por eso ahora el filtro se puede encender.
+  #
+  # Cuesta el 6 % de la cubierta —una lente de 0.63 x 0.13 m contra el canto cercano— y a
+  # cambio se lleva por delante una clase entera de fallo: el bulto bajo que se planifica
+  # ahí, no se puede depositar y acaba devuelto a la mesa con `ik_unreachable`.
+  robot_xy: [0.60, -0.72]        # el pedestal, de `scene.yaml: robot.base_pos`
+  reach_min: 0.45                # MEDIDO. El anillo muerto de arriba
+  reach_max: 1.30                # NO medido y NO ata: el alcance nominal del UR10e, y la
+                                 # esquina más lejana del palé cae a 1.15 m. Está para
+                                 # ENCENDER el filtro —`reach_max: 0` lo salta entero—,
+                                 # no para recortar nada. Si alguien mide el límite
+                                 # exterior de verdad, es este número y `reach_falloff`.
   reach_knee: 0.25
-  reach_falloff: 0.0
+  reach_falloff: 0.0             # sin medir; 0 = el límite exterior no cae con la altura
   weights:                       # los 14 términos de `placing`. NO suman 1, y no tienen
                                  # que sumarlo: el score se normaliza dividiendo por la
                                  # suma de pesos, y sale en [0,1] igual.
@@ -533,7 +568,19 @@ heuristic:
     support_ratio: 1.0           # fracción de la huella que apoya
     levelness: 0.8               # mantener plano el techo del montón
     gap_waste: 0.8               # no dejar franjas demasiado estrechas para llenarlas
-    reachability: 0.7            # neutro mientras `robot_xy` no esté puesto
+    reachability: 0.0            # A CERO A PROPÓSITO, Y NO ES LO MISMO QUE ANTES.
+                                 # Con `robot_xy` sin poner, este término valía 1.0 para
+                                 # TODOS los candidatos: sumaba una constante y no
+                                 # ordenaba nada. Al encenderlo para el filtro duro
+                                 # (abajo) pasa a valer (limite-distancia)/limite, y con
+                                 # 0.7 de peso eso reordena de verdad: el planificador se
+                                 # pone a preferir el hueco más cercano al pedestal.
+                                 # Medido con 0.7 y el filtro encendido, semilla 1: el 13
+                                 # cae a 6/8, el 23 a 6/8 y el 31 a 1/5. A 0.0 el orden
+                                 # es EXACTAMENTE el de antes —quitar una constante de
+                                 # todos los candidatos no cambia el argmax— y el filtro
+                                 # duro sigue actuando, que es lo único que se quería.
+                                 # Subirlo exige rebarrer los catorce pesos.
     lowness: 0.6                 # preferir z_base bajo
     peak_penalty: 0.5            # no levantar el punto más alto
     overhang: 0.5                # penalizar el voladizo
@@ -784,6 +831,12 @@ plant:
 episode:
   level: 11                      # el que corre si no se pide otro
   max_duration_s: 600            # tiempo SIMULADO máximo -> `timeout`
+  place_retries: 2               # huecos de repuesto por bulto cuando el brazo no llega
+                                 # al que eligió la heurística. NO replanifica: baja por
+                                 # la cola de `ranked_placements`, que ya viene separada
+                                 # 90 mm entre huecos porque reintentar un centímetro más
+                                 # allá falla exactamente igual. A 0 se desactiva y un
+                                 # `ik_unreachable` vuelve a cerrar el episodio.
   tolerance_xy: 0.020            # por encima del suelo medido del servo, no por debajo
   tolerance_yaw: 0.10            # rad (~5.7 grados)
   max_overhang: 0.020            # por encima -> `overhang_violation`

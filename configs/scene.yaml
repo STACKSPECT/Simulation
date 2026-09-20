@@ -172,13 +172,63 @@ auxiliary_table:
   friction: [0.9, 0.01, 0.001]
   rgba: [0.20, 0.38, 0.48, 1]
 
+# ── LA CAJA NEGRA, Y LA CINTA QUE SALE DE ELLA ───────────────────────────────
+#
+# De aquí salen los bultos en los niveles de mesa (1x) y de cinta (2x). Es OPACA a
+# propósito: el sistema no sabe lo que viene, y lo que había antes decía justo lo
+# contrario —los que esperaban se aparcaban en fila, `x = -3 - i*0.7`, o sea 21 m de
+# cartones perdiéndose en el horizonte con treinta bultos—.
+#
+# Se dimensiona SOLA con la carga del nivel: la rejilla de espera se calcula en
+# `src/cell/scene.py::parking_grid` y el cerramiento se ajusta a ella, así que un nivel
+# de cuatro bultos tiene una caseta pequeña y uno de treinta, un almacén. El `pitch` sale
+# del mayor del catálogo (0.55 x 0.36) más cinco centímetros de aire: los que esperan no
+# se tocan entre sí, que es lo que los mantiene quietos.
+black_box:
+  pitch: [0.60, 0.42]            # rejilla de espera, [x, y]
+  columns: 5                     # a lo ancho; las filas salen de cuántos bultos haya
+  margin: 0.15                   # aire entre la rejilla y la pared
+  wall: 0.05
+  height: 1.25
+  gap: 0.10                      # separación de la rejilla respecto al ascensor
+  rgba: [0.07, 0.08, 0.09, 1]
+
+# Ascensor físico antes de la banda: carga abajo y eleva por contacto, sin mover la caja
+# a mano. 0.80 m de fondo cubre la huella máxima girada en X:
+# 0.55*cos30 + 0.40*sin30 = 0.676 m. El ancho es el de la banda: ensanchar sólo el
+# ascensor a 0.70 m cambiaba el apoyo lateral al transferir y dejaba 1.2 mm de vuelo
+# en el segundo paquete del nivel 23, semilla 1. Con ancho continuo, todos apoyan.
+# Subir 0.54 m a 0.30 m/s de pico tarda 2.70 s con la rampa suave; bajar vacío, lo mismo.
+elevator:
+  depth: 0.80                    # COMPLETA, en X; desemboca sin hueco en la banda
+  side: 0.06                     # aire lateral entre plataforma y bastidor
+  height: 1.85                   # altura del bastidor
+  lower_height: 0.04             # cota de carga, sobre el suelo
+  speed: 0.30                    # pico de velocidad vertical, m/s
+  rgba: [0.20, 0.22, 0.26, 1]
+
+# La banda de los niveles de MESA. Misma cota que la mesa —0.58— para que el bulto pase
+# de una a otra sin escalón: `Belt._riding` mira la altura, así que sigue arrastrando ya
+# sobre la mesa y por eso puede dejarlo en su centro. Acaba justo en el canto de la mesa.
+#
+# Va en su propio bloque y no reutiliza `conveyor` porque son dos carriles distintos: el
+# de la cinta entrega al brazo y éste entrega a la mesa, y comparten todo menos dónde
+# acaban.
+feeder:
+  dims: [1.20, 0.44]             # [largo, ancho] COMPLETAS
+  height: 0.58
+  speed: 0.25
+  friction: [1.10, 0.02, 0.002]
+  station_tol: 0.030
+  timeout_s: 25.0
+
 # La cinta. `station` es donde el paquete se PARA para que el brazo lo coja, y está
 # dentro del alcance comprobado: coincide con el centro de la mesa, que es la pose de
 # agarre ya barrida con IK.
 #
-# La banda se mueve de verdad: un `slide` con actuador de velocidad arrastra el paquete
-# y parar es poner la consigna a cero. NO se teletransporta nada — el punto de tener
-# cinta es que el paquete llegue con la pose que traiga, incluida la torcida.
+# La banda arrastra imponiendo velocidad X al paquete apoyado en ella; el ascensor
+# mueve su plataforma y eleva por contacto. Tras cargar abajo no se reescribe la pose
+# del paquete: llega con la orientación que traiga, incluida la torcida.
 #
 # ── LA ESTACIÓN NO PUEDE ESTAR EN EL CANTO, Y ES DONDE ESTABA ───────────────────
 # Con `center: [-0.85, -0.66]` y `dims: [1.40, 0.50]` la banda acababa en x = -0.15 y la
@@ -204,8 +254,8 @@ auxiliary_table:
 # vuelve a 32/180. La estación queda donde la de la mesa, que es la pose de agarre ya
 # barrida con IK, a 0.80 m del pedestal.
 #
-# La ENTRADA no se mueve: `Belt.entry_x = center_x - length/2 + 0.12 = -1.43`, igual que
-# antes, así que el recorrido del paquete y lo medido sobre él siguen valiendo.
+# El paquete empieza ahora en el centro del ascensor, antes de la banda. La estación
+# y la superficie de recogida conservan sus cotas; la elevación añade tiempo al ciclo.
 conveyor:
   center: [-0.70, -0.80]          # [x, y] de la banda, en el mundo
   dims: [1.70, 0.50]              # [largo, ancho] COMPLETAS
