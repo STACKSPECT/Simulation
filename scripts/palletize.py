@@ -175,7 +175,7 @@ def _aborted(seed: int, scene) -> EpisodeResult:
         duration_s=round(float(scene.clock), 2),
         failure=None,
         oracle=bool(getattr(scene, "oracle", False)),
-        task="palletizing",
+        task=scene.level.source,
         metrics={"aborted": True},
     )
 
@@ -212,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     first_scene.oracle_heightmap = args.oracle_heightmap
     log = RunLog(
         REPO,
-        task="palletizing",
+        task=first_scene.level.source,
         level=level_id,
         oracle=oracle,
         motion_speed=1.0 if speed == 0.0 else speed,

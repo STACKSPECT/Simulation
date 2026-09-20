@@ -217,7 +217,11 @@ optimistas y la pantalla dice que todo va bien hasta el derrumbe.
   lanza `ValueError` con cualquier otro, a propósito. Añadir uno obliga a tocar tres
   sitios en Platform: pídeselo a quien lleve el backend, no lo inventes aquí.
 
-Y `task` tiene que ser **`"palletizing"`**, que también lo valida el SDK.
+Y `task` es **la fuente del nivel**: `table`, `conveyor` o `truck` — mesa, cinta y camión,
+que es lo que la interfaz enseña traducido. Sale de `scene.level.source` y no se escribe a
+mano: así las tres tareas se comparan entre sí en vez de ser todas «paletizado». El SDK lo
+valida contra `TASKS`, y el CHECK de `runs`/`episodes` acepta además el histórico
+(`induction`, `palletizing`), que es lo que ya está subido.
 
 **`synthetic` no lo escribe esta simulación** (es para datos sembrados), `git_sha` y
 `oracle` van en el run y no se repiten por episodio, y `status` sale de

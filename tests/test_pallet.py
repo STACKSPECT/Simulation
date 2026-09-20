@@ -11,7 +11,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 import numpy as np  # noqa: E402
-from theker_telemetry import FAILURES  # noqa: E402
+from theker_telemetry import FAILURES, TASKS  # noqa: E402
 
 from placing import METRIC_NAMES  # noqa: E402
 from scripts.palletize import (  # noqa: E402
@@ -81,6 +81,9 @@ def test_event_rows_use_closed_vocabulary_and_unique_seq() -> None:
 def test_views_and_failures_match_the_schema() -> None:
     assert set(CFG["cameras"]) == set(VIEWS) == {"top", "side", "iso", "camera"}
     assert set(FAILURES) == EXPECTED_FAILURES
+    # `task` es la fuente. Si el SDK no la conoce, `EpisodeResult` lanza y el episodio
+    # no sube: que falle aquí en un segundo y no a mitad de un run.
+    assert set(SOURCES) <= set(TASKS), sorted(set(SOURCES) - set(TASKS))
 
 
 def test_level_ids_encode_the_source() -> None:
@@ -384,13 +387,14 @@ def test_oracle_is_any_stub_for_every_combination() -> None:
 
 def test_an_aborted_episode_is_unsuccessful_without_inventing_a_failure() -> None:
     scene = SimpleNamespace(
-        level=SimpleNamespace(id=11), boxes=[object()], clock=1.25, oracle=False,
+        level=SimpleNamespace(id=11, source="table"),
+        boxes=[object()], clock=1.25, oracle=False,
     )
     result = _aborted(7, scene)
     assert result.success is False
     assert result.failure is None
     assert result.metrics["aborted"] is True
-    assert result.task == "palletizing"
+    assert result.task == "table"
 
 
 def test_sigterm_unwinds_like_ctrl_c() -> None:

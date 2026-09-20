@@ -139,7 +139,8 @@ of the run's uploads with it:
 Related asymmetry, worth memorising: **inside an event `payload`, extra keys are
 harmless and missing keys break silently. At the row level, extra keys are lethal** —
 `event`/`placement`/`pallet_state`/`snapshot` take `**kwargs` and every key is a column,
-so one typo is a 400 that turns uploads off. `task` must be `"palletizing"`.
+so one typo is a 400 that turns uploads off. `task` is the level's source — `table`,
+`conveyor` or `truck` — and comes from `scene.level.source`, never hard-coded.
 
 `tests/test_pallet.py` exists to catch exactly these before you spend minutes of physics
 finding out.

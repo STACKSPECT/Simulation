@@ -129,7 +129,9 @@ def episode_result(episode: Episode, scene) -> EpisodeResult:
         duration_s=episode.duration_s,
         failure=episode.failure,
         oracle=bool(getattr(scene, "oracle", False)),
-        task="palletizing",
+        # La tarea es de dónde se coge: mesa, cinta o camión. Sale de la fuente del
+        # nivel y no de una constante, que es lo que permite comparar las tres.
+        task=scene.level.source,
         metrics={
             "cog_offset_xy": _r(np.linalg.norm(state.cog[:2])) if state else 0.0,
             "fill_ratio": _r(state.fill_ratio) if state else 0.0,
