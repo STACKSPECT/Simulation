@@ -233,6 +233,13 @@ the scenery costs. It should cost nothing: the plant is non-colliding backdrop, 
 episodes come out identical to the last decimal. What it does change is the light, which has
 its own measured table in `configs/pallet.yaml`. See `src/cell/plant.py`.
 
+<div align="center">
+  <img src="docs/img/truck-bay.png" alt="The cell as a workplace: a trailer backed into the bay on the left with its doors open and its wooden floor showing, the UR10e on its pedestal reaching over a part-built pallet of cartons with the vacuum gripper, a blue work table beside it, two teal process tanks behind, and orange bay markings painted on the floor" width="900">
+</div>
+
+That is level `34` — the truck as somewhere a robot actually stands, rather than a source in a
+diagram.
+
 Each type carries a `cog_offset_m`: the centre of mass is *not* the geometric centre.
 `vision/gauge.py` estimates it from one plumb wrist reading — the horizontal components come
 out exact, the vertical is anchored to the geometric centre because nothing downstream reads
@@ -267,7 +274,7 @@ uv run stable-pallet dashboard          # prints: Panel en http://127.0.0.1:8000
 
 | Control | What it does |
 |---|---|
-| **Experiment picker** | The levels, read straight from `configs/pallet.yaml`. Add a level to the YAML and the card appears |
+| **Experiment picker** | The fourteen levels, read straight from `configs/pallet.yaml`, grouped by source. Add a level to the YAML and the card appears |
 | **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused |
 | **Speed / fast-forward** | ×0,5 to *máx*, changeable mid-run; the toggle switches the two arm modes measured [above](#results) |
 | **Playback** | Pause, scrub, step either way, play backwards. The run waits where it was and continues from there |
