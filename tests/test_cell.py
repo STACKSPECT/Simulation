@@ -73,9 +73,16 @@ def test_auxiliary_table_exists_in_all_levels() -> None:
     cfg = load_configs()
     auxiliary = cfg["auxiliary_table"]
     pallet = cfg["pallet"]
-    pallet_right = float(pallet["center"][0]) + float(pallet["dims"][0]) / 2
-    table_left = float(auxiliary["center"][0]) - float(auxiliary["size"][0])
-    assert table_left - pallet_right >= 0.05 - 1e-9
+    # El aire al palé, sin presuponer de qué lado cae la mesa: hoy está a la IZQUIERDA
+    # (ver la cabecera de `configs/scene.yaml`), y el lado es justo lo que se cambió.
+    half = float(pallet["dims"][0]) / 2
+    gap = max(
+        (float(auxiliary["center"][0]) - float(auxiliary["size"][0]))
+        - (float(pallet["center"][0]) + half),
+        (float(pallet["center"][0]) - half)
+        - (float(auxiliary["center"][0]) + float(auxiliary["size"][0])),
+    )
+    assert gap >= 0.05 - 1e-9
 
     # El mayor bulto cabe girado: su ancho va en X y su largo en Y.
     generator = cfg["generator"]
@@ -142,6 +149,124 @@ def test_stability_test_reuses_the_loaded_pallet_and_restores_it() -> None:
         assert scene.data.eq_active[scene.pallet_weld]
     finally:
         scene.close()
+
+
+def test_level_11_stack_survives_all_fifteen_jolts() -> None:
+    """Ningún mueble de la celda estorba a la pila mientras se la sacude.
+
+    Es una regresión de MOBILIARIO, no del planificador. El ensayo de estabilidad (#28)
+    y la mesa auxiliar (#29) entraron por separado y cada uno estaba bien; juntos no,
+    porque la mesa estaba a 50 mm del canto del palé y durante la sacudida el palé se
+    suelta de su weld y VIAJA: +309 mm en la de 0.80 g en X. La caja de la capa 2 daba
+    contra la mesa y la pila deslizaba 31,5 mm contra un umbral de 30, sin que se cayera
+    ninguna caja — o sea, sin ninguna señal que mirase nadie.
+
+    Con la mesa donde está hoy el nivel 11 semilla 1 da 99.9/100, mínima 99.0 y aguanta
+    las 15. Si alguien vuelve a acercar un mueble al palé, esto es lo que se entera.
+    Las cifras y el barrido, en la cabecera de `configs/scene.yaml: auxiliary_table`.
+
+    `speed=0.0` NO es un detalle: es lo que pone `arm.fast_forward` (ver
+    `src/episode.py`) y es el defecto de `scripts/palletize.py` sin visor, o sea la
+    configuración en la que se midió todo esto. Con `speed=1.0` el brazo recorre los
+    waypoints en vez de teletransportarse, la pila queda distinta y el fallo NO
+    aparece ni con la mesa en su sitio viejo: el test pasaría sin vigilar nada.
+    """
+    from src import measure
+
+    scene = build_scene(level_id=11, seed=1, simplified=True)
+    try:
+        episode = run_episode(
+            scene, OracleDetector(), OracleGauge(), ScorePlanner(scene.cfg),
+            seed=1, speed=0.0,
+        )
+        assert episode.success, episode.failure
+
+        physical = measure.on_pallet(scene, episode.final_placements)
+        result = run_stability_test(scene, [item.box for item in physical])
+
+        assert result["ran"]
+        shake = result["shake"]["summary"]
+        assert shake["trial_count"] == 15
+        assert shake["held_all"], (
+            "alguna sacudida movió la pila más de la cuenta; si acabas de mover un "
+            f"mueble, ése es el primer sospechoso. min_score={shake['min_score']}"
+        )
+        assert result["beam"]["summary"]["held_all"]
+    finally:
+        scene.close()
+
+
+def _shake_contacts_with(level: int, seed: int, geom_name: str) -> tuple[int, dict]:
+    """Contactos entre la pila y un geom nombrado DURANTE las 15 sacudidas.
+
+    Cuenta sólo el transporte: la viga tumba la pila a propósito en los niveles
+    profundos y ahí sí acaban cayendo cajas sobre cualquier cosa que haya al lado.
+    """
+    from src import measure
+    from src.cell import stability as stability_module
+
+    scene = build_scene(level_id=level, seed=seed, simplified=True)
+    original = scene.mujoco.mj_step
+    try:
+        episode = run_episode(
+            scene, OracleDetector(), OracleGauge(), ScorePlanner(scene.cfg),
+            seed=seed, speed=0.0,
+        )
+        boxes = [item.box for item in measure.on_pallet(scene, episode.final_placements)]
+        assert boxes, f"nivel {level} semilla {seed}: no quedó ninguna caja en el palé"
+        target = scene.mujoco.mj_name2id(
+            scene.model, scene.mujoco.mjtObj.mjOBJ_GEOM, geom_name
+        )
+        assert target >= 0, f"no existe el geom {geom_name!r}"
+        tally = 0
+
+        def counting_step(model, data, nstep=1):
+            nonlocal tally
+            original(model, data, nstep)
+            for index in range(data.ncon):
+                contact = data.contact[index]
+                if target in (int(contact.geom1), int(contact.geom2)):
+                    tally += 1
+
+        scene.mujoco.mj_step = counting_step
+        trial = stability_module._StabilityTrial(
+            scene, boxes, dict(scene.cfg["stability_test"])
+        )
+        # Las sacudidas PRIMERO y el return después: en `return tally, run(...)` Python
+        # evalúa `tally` antes de correr nada y siempre devolvería cero.
+        summary = trial.run_transport()["summary"]
+        return tally, summary
+    finally:
+        scene.mujoco.mj_step = original
+        scene.close()
+
+
+def test_no_furniture_touches_the_stack_while_it_is_shaken() -> None:
+    """El guardia bueno del mobiliario: CERO contactos, no un umbral de puntuación.
+
+    Mirar sólo la puntuación no vale. El nivel 13 semilla 1 es el caso justo: su pila
+    asoma 48,8 mm por el canto izquierdo del palé YA EN REPOSO —el vuelo lo pone el
+    planificador, no la sacudida— así que en planta pasa a 1,1 mm de la mesa, y aun así
+    aguanta las 15. Un test de puntuación lo daría por bueno estando a un pelo.
+
+    Lo que de verdad mantiene la mesa fuera del ensayo es que su único geom con
+    colisión es la tapa, z[0.50, 0.58], y las cajas voladas cuelgan a cotas de capa que
+    no cruzan esa banda. Eso NO se ve en la puntuación: se ve contando contactos. Si
+    alguien sube `height`, engorda la tapa, le da colisión a las patas o vuelve a
+    arrimar un mueble al palé, esto se entera y la puntuación puede no enterarse.
+
+    Medido: cero contactos en 24 celdas (niveles 11/13/21/23/31/33 x semillas 1-4), y
+    los tres números del resumen idénticos a correr con la mesa ausente. La tabla está
+    en la cabecera de `configs/scene.yaml: auxiliary_table`.
+    """
+    for level, seed in ((13, 1), (11, 1)):
+        contacts, summary = _shake_contacts_with(level, seed, "auxiliary_table")
+        assert contacts == 0, (
+            f"nivel {level} semilla {seed}: la mesa auxiliar tocó la pila en "
+            f"{contacts} pasos de las sacudidas. Contaminar el ensayo no se ve en la "
+            f"puntuación (salió {summary['mean_score']}/100, mínima "
+            f"{summary['min_score']}): mira dónde está el mueble."
+        )
 
 
 def test_belt_moves_the_package_through_physics() -> None:
