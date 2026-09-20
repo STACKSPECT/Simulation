@@ -8,7 +8,7 @@ Lo que trae y se usa aquí sin cambios:
 
     TCP_SITE                       nombre del site que la IK usa como frame del TCP
     TOOL_DOWN                      la orientación de trabajo de la herramienta
-    add_table(cfg)                 la mesa, a partir de configs/scene.yaml
+    add_table(cfg, name=...)       una mesa, a partir de configs/scene.yaml
     tcp_frame(position, yaw)       pose de agarre desde un punto y el giro de la caja
     lookat_quat(position, lookat)  cuaternión de una cámara que mira a un punto
 
@@ -140,8 +140,8 @@ def mat_to_quat(matrix: np.ndarray) -> np.ndarray:
     return quaternion / np.linalg.norm(quaternion)
 
 
-def add_table(cfg: dict) -> str:
-    """La mesa de trabajo, a partir del bloque `table` de `configs/scene.yaml`.
+def add_table(cfg: dict, *, name: str = "table") -> str:
+    """Una mesa de trabajo, a partir de un bloque de `configs/scene.yaml`.
 
     `size` son SEMIEJES porque es lo que quiere MuJoCo, y la clave se llama así por eso:
     en el mismo YAML `dims` son dimensiones completas. Un factor 2 escondido en un fichero
@@ -164,7 +164,7 @@ def add_table(cfg: dict) -> str:
         for dy in (-half_y + 0.05, half_y - 0.05)
     )
     return f"""
-    <geom name="table" type="box" pos="{x} {y} {top - half_z:.4f}"
+    <geom name="{name}" type="box" pos="{x} {y} {top - half_z:.4f}"
           size="{half_x} {half_y} {half_z}" rgba="{rgba}"
           friction="{friction}" conaffinity="3"/>
 {legs}"""

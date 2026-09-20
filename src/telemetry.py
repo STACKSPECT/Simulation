@@ -39,6 +39,7 @@ def run_config(scene) -> dict:
         ],
         "motion": dict(scene.cfg["motion"]),
         "supply": dict(scene.cfg[source if source != "table" else "table"]),
+        "auxiliary_table": dict(scene.cfg["auxiliary_table"]),
     }
 
 

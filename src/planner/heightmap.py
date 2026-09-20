@@ -101,16 +101,14 @@ def measure(scene) -> Heightmap:
 def _stamp_static_obstacles(scene, cells, origin, cell, nx, ny) -> None:
     """Los muebles de la celda que se meten sobre la huella del palé.
 
-    La mesa de recogida ocupa x∈[-0.56, 0.16] y el palé empieza en x=0.00: hay un
-    rectángulo de la cubierta que NO se puede usar, y hasta ahora nadie lo decía. Un
-    planificador que puntúa huecos se va derecho a esa esquina —está baja, está pegada al
-    canto y apoya al 100%—, el brazo empuja la caja contra la mesa y el episodio muere en
-    `ik_unreachable` sin que se entienda por qué. Medido: la caja se queda a 135 mm del
-    destino con la mesa penetrada 39 mm.
+    Las cámaras ven cualquier mesa que invada el palé y la meten en el mapa ellas solas.
+    Esto hace que el oráculo cuente la MISMA verdad: si las dos medidas discrepan, la
+    comparación entre correr con percepción y correr sin ella deja de significar nada.
 
-    Las cámaras ven la mesa y la meten en el mapa ellas solas. Esto es para que el
-    oráculo cuente la MISMA verdad: si las dos medidas discrepan, la comparación entre
-    correr con percepción y correr sin ella deja de significar nada.
+    Hoy tanto la mesa de recogida como la auxiliar dejan aire hasta el palé. Se mantienen
+    aquí las dos para que moverlas en configuración no vuelva a ofrecer como hueco libre
+    una esquina físicamente ocupada. La mesa de recogida sólo existe en los niveles 1x;
+    la auxiliar existe en los nueve.
 
     La cinta y el remolque no hacen falta aquí: ninguno se solapa con la huella del palé.
     El remolque acaba en y=-0.40, justo en el borde. La cinta ya no se libra por la X
@@ -118,21 +116,25 @@ def _stamp_static_obstacles(scene, cells, origin, cell, nx, ny) -> None:
     la Y: ocupa y∈[-1.05, -0.55] y deja 150 mm hasta la cubierta. Ése es el motivo de que
     bajase a y=-0.80 al alargarla; si alguien la sube, esto deja de ser cierto.
     """
-    table = scene.cfg.get("table")
-    if not table:
-        return
-    center_x, center_y = (float(v) for v in table["center"])
-    half_x, half_y, _ = (float(v) for v in table["size"])     # SEMIEJES
-    top = float(table["height"]) - scene.deck_z
-    if top <= 0.0:
-        return
-    x0 = max(0, math.floor((center_x - half_x - origin[0]) / cell))
-    x1 = min(nx, math.ceil((center_x + half_x - origin[0]) / cell))
-    y0 = max(0, math.floor((center_y - half_y - origin[1]) / cell))
-    y1 = min(ny, math.ceil((center_y + half_y - origin[1]) / cell))
-    if x0 >= x1 or y0 >= y1:
-        return
-    cells[y0:y1, x0:x1] = np.maximum(cells[y0:y1, x0:x1], top)
+    names = ["auxiliary_table"]
+    if scene.level.source == "table":
+        names.append("table")
+    for name in names:
+        table = scene.cfg.get(name)
+        if not table:
+            continue
+        center_x, center_y = (float(v) for v in table["center"])
+        half_x, half_y, _ = (float(v) for v in table["size"])     # SEMIEJES
+        top = float(table["height"]) - scene.deck_z
+        if top <= 0.0:
+            continue
+        x0 = max(0, math.floor((center_x - half_x - origin[0]) / cell))
+        x1 = min(nx, math.ceil((center_x + half_x - origin[0]) / cell))
+        y0 = max(0, math.floor((center_y - half_y - origin[1]) / cell))
+        y1 = min(ny, math.ceil((center_y + half_y - origin[1]) / cell))
+        if x0 >= x1 or y0 >= y1:
+            continue
+        cells[y0:y1, x0:x1] = np.maximum(cells[y0:y1, x0:x1], top)
 
 
 def measure_ground_truth(scene) -> Heightmap:

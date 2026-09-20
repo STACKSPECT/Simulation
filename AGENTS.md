@@ -41,7 +41,7 @@ abrir la de los demás.
 |---|---|---|
 | **Visión** | `src/vision/` | Ve el paquete que la fuente presenta (`detect.py`), lo **mide** ya en la mano (`gauge.py`) y **mide la superficie del palé** con tres cámaras de profundidad (`depth.py` renderiza, `surface.py` desproyecta y fusiona, numpy puro) |
 | **Planificación** | `src/planner/` | Mapa de alturas del palé (`heightmap.py`) y **heurística de score** que elige el hueco (`heuristic.py`, adaptador sobre `placing/`) |
-| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión— y cámaras (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`) |
+| **Ejecución** | `src/cell/` | MuJoCo: escena, brazo, fuente —mesa, cinta o camión—, mesa auxiliar común y cámaras (`scene.py`, `arm.py`, `conveyor.py`, `table.py`, `truck.py`, `render.py`) |
 | Medida | `src/measure.py` | El resultado: error, apoyo, vuelo, CoG del palé, margen de estabilidad |
 | Trazabilidad | `src/telemetry.py` | **Única** frontera con la plataforma |
 
@@ -270,12 +270,16 @@ Tres avisos:
   mapa sale 1.18 m: no es el montón, es el propio robot cruzando el encuadre. A mitad de
   episodio el brazo está en la estación y no estorba, pero el problema está ahí y lo que
   toca es excluir los geoms del robot del render de profundidad, no subir `z_max`.
-- **El mapa oráculo tiene que contar la MISMA verdad.** `measure_ground_truth` estampa la
-  mesa, que se mete sobre la esquina del palé (x∈[-0.56, 0.16] contra un palé que empieza
-  en x=0.00). Sin eso, el oráculo ofrece una esquina que no existe, el planificador se va
-  derecho a ella —está baja, pegada al canto y apoya al 100 %— y el brazo empuja la caja
-  contra la mesa: medido, se queda a 135 mm del destino y el episodio muere en
-  `ik_unreachable`. Las cámaras ya la veían; el oráculo, no.
+- **El mapa oráculo tiene que contar la MISMA verdad.** `measure_ground_truth` estampa
+  **dos mesas nombradas, no cualquiera que invada**: la auxiliar siempre, y la de recogida
+  sólo en los niveles de mesa, que es donde se monta. Una tercera mesa futura no se
+  estamparía sola: hay que añadirla a esa lista (`heightmap._stamp_static_obstacles`).
+  Hoy la de recogida deja 60 mm de aire y la auxiliar común deja 50 mm, así que ninguna
+  pisa una sola celda —lo ancla `tests/test_pallet.py`, sin escena—, pero el estampado
+  sigue siendo obligatorio si se mueve alguna: sin él, el oráculo ofrece una esquina
+  ocupada que las cámaras sí ven. Ya se midió ese fallo con la mesa antigua: el brazo
+  empujaba la caja contra ella, se quedaba a 135 mm del destino y el episodio moría en
+  `ik_unreachable`.
 
 ### Las fuentes
 
@@ -284,6 +288,18 @@ mesa deja los bultos preparados y no mueve nada. La cinta avanza físicamente ha
 estación y se para. El camión presenta la carga completa y elige siempre la caja más
 alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
 encima de la fuente.
+
+Además de la fuente, **los nueve niveles montan una mesa auxiliar vacía** a la derecha
+del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
+el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
+camino del código**; se acepta a propósito como superficie disponible. Deja 50 mm de aire
+hasta el palé para no contaminar su medida.
+
+Lo comprobado de esa mesa es **su centro, no su huella**: cabe ahí el bulto máximo
+girado, y `tests/test_cell.py` deja un bulto reposando en él de verdad. El 28 % de la
+huella queda fuera del alcance del UR10e —la esquina lejana está a 1,576 m contra 1,300
+de alcance—, así que una estrategia que quiera soltar fuera del centro tiene que repetir
+antes el barrido de IK. Las cifras y el barrido están en `configs/scene.yaml`.
 
 Dos avisos:
 

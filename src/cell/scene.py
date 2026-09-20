@@ -1,5 +1,5 @@
 """
-La escena: brazo, mesa, palé, la fuente de suministro, paquetes, cámaras y luces.
+La escena: brazo, mesas, palé, la fuente de suministro, paquetes, cámaras y luces.
 
 Portado desde `tools/stable_pallet/simulator.py`, que es el demostrador del que sale
 toda la capa de ejecución de este repo.
@@ -33,7 +33,8 @@ de cinemática, masas e inercias. La ruta está en `configs/scene.yaml: robot.mo
     guionizado. `layer_heights`, `layer_base_z` y `planned_pose` no existen: lo que las
     sustituye es `PlacementPlan.position`, que decide el planificador.
   - **Hay tres fuentes, no una.** El nivel dice si la carga espera en la mesa, llega por
-    la cinta o viene apilada en un remolque, y la escena monta el mobiliario de esa. Ver
+    la cinta o viene apilada en un remolque, y la escena monta el mobiliario de esa. Una
+    mesa auxiliar vacía acompaña a las tres para poder apartar bultos. Ver
     `src/cell/conveyor.py`.
   - **Cada tipo de paquete lleva `cog_offset`**, y se monta como un `<inertial>`
     explícito dentro del body, no como `pos` del geom: así el cartón se ve centrado y
@@ -48,7 +49,7 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -860,11 +861,12 @@ def build_mjcf(
     )
     welds = "\n      ".join(_weld_xml(box) for box in boxes if box.index != held_index)
 
-    fixtures = {
+    source_fixture = {
         "table": lambda: add_table(cfg["table"]),
         "conveyor": lambda: _belt_xml(cfg, simplified),
         "truck": lambda: _truck_xml(cfg, simplified),
     }[level.source]()
+    auxiliary_table = add_table(cfg["auxiliary_table"], name="auxiliary_table")
 
     meshes = (
         ""
@@ -915,7 +917,8 @@ def build_mjcf(
           friction="1.0 0.01 0.001" conaffinity="{SOLID}"/>
     <geom name="pedestal" type="cylinder" pos="{ped['center'][0]} {ped['center'][1]} {ped['height'] / 2}"
           size="{ped['radius']} {ped['height'] / 2}" rgba="0.22 0.25 0.28 1" conaffinity="{SOLID}"/>
-{fixtures}
+{source_fixture}
+{auxiliary_table}
 {_industrial_xml(simplified)}
 {_pallet_xml(cfg, simplified)}
 {_ur10e_xml(cfg, _cups_xml(cfg, simplified), carried, simplified)}

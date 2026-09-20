@@ -59,6 +59,36 @@ def test_scenes_compile_for_all_sources() -> None:
             scene.close()
 
 
+def test_auxiliary_table_exists_in_all_levels() -> None:
+    """Los nueve niveles montan la misma mesa vacía, además de su propia fuente."""
+    cfg = load_configs()
+    auxiliary = cfg["auxiliary_table"]
+    pallet = cfg["pallet"]
+    pallet_right = float(pallet["center"][0]) + float(pallet["dims"][0]) / 2
+    table_left = float(auxiliary["center"][0]) - float(auxiliary["size"][0])
+    assert table_left - pallet_right >= 0.05 - 1e-9
+
+    # El mayor bulto cabe girado: su ancho va en X y su largo en Y.
+    generator = cfg["generator"]
+    assert 2 * float(auxiliary["size"][0]) >= float(generator["width"][1])
+    assert 2 * float(auxiliary["size"][1]) >= float(generator["length"][1])
+
+    for level_id in sorted(levels(cfg)):
+        scene = build_scene(level_id=level_id, simplified=True)
+        try:
+            mujoco = scene.mujoco
+            auxiliary = mujoco.mj_name2id(
+                scene.model, mujoco.mjtObj.mjOBJ_GEOM, "auxiliary_table"
+            )
+            source_table = mujoco.mj_name2id(
+                scene.model, mujoco.mjtObj.mjOBJ_GEOM, "table"
+            )
+            assert auxiliary >= 0, f"nivel {level_id}: falta la mesa auxiliar"
+            assert (source_table >= 0) is (scene.level.source == "table")
+        finally:
+            scene.close()
+
+
 def test_all_four_cameras_exist() -> None:
     scene = build_scene(level_id=11, simplified=True)
     try:
@@ -270,6 +300,19 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
                 for y in (py - dy * 0.30, py, py + dy * 0.30):
                     for z in (scene.deck_z + 0.10, scene.deck_z + 0.55):
                         targets.append((x, y, z, 0.0))
+            # La mesa auxiliar sólo es útil si se puede depositar el bulto más alto y
+            # hacer también el waypoint de aproximación sobre el centro de su superficie.
+            auxiliary = scene.cfg["auxiliary_table"]
+            ax, ay = (float(value) for value in auxiliary["center"])
+            tallest = float(scene.cfg["generator"]["height"][1])
+            drop_z = (
+                float(auxiliary["height"]) + tallest + arm.cup_gap
+                + float(scene.cfg["motion"]["drop_clearance"])
+            )
+            targets.extend([
+                (ax, ay, drop_z, np.pi / 2),
+                (ax, ay, drop_z + float(scene.cfg["motion"]["place_clearance"]), np.pi / 2),
+            ])
             failed = [
                 target for target in targets
                 if arm.solve_ik(target[:3], tcp_frame(target[:3], target[3]).rotation) is None
@@ -311,6 +354,53 @@ def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
         assert episode.success, episode.failure
         assert episode.duration_s < 50.0
     finally:
+        scene.close()
+
+
+def test_robot_can_leave_a_package_on_the_auxiliary_table() -> None:
+    """La mesa no sólo existe: sostiene un bulto depositado por el brazo."""
+    scene = build_scene(level_id=11, seed=3, simplified=True)
+    arm = ArmController(scene)
+    arm.fast_forward = True
+    try:
+        supply = make_supply(scene)
+        supply.stage(scene)
+        assert supply.present(scene) is not None
+        assert supply.current is not None
+        box = scene.boxes[supply.current]
+
+        top = scene.box_top_center(box.index)
+        yaw = scene.box_yaw(box.index)
+        seal_z = float(top[2]) + arm.cup_gap
+        safe_z = max(
+            float(scene.cfg["motion"]["transit_height"]),
+            seal_z + float(scene.cfg["motion"]["place_clearance"]),
+        )
+        assert arm.go_to(float(top[0]), float(top[1]), safe_z, yaw)
+        assert arm.go_to(float(top[0]), float(top[1]), seal_z, yaw, approach=True)
+        assert arm.seal(box.index)
+        assert arm.go_to(float(top[0]), float(top[1]), safe_z, yaw)
+
+        auxiliary = scene.cfg["auxiliary_table"]
+        x, y = (float(value) for value in auxiliary["center"])
+        yaw = np.pi / 2                         # el bulto largo cabe girado en la mesa
+        target_z = (
+            float(auxiliary["height"]) + box.dims_m[2] + arm.cup_gap
+            + float(scene.cfg["motion"]["drop_clearance"])
+        )
+        safe_z = target_z + float(scene.cfg["motion"]["place_clearance"])
+        assert arm.go_to(x, y, safe_z, yaw)
+        assert arm.go_to(x, y, target_z, yaw, approach=True)
+        arm.release()
+        scene.settle()
+
+        position, _ = scene.box_pose(box.index)
+        bottom = float(position[2] - box.dims_m[2] / 2)
+        assert np.linalg.norm(position[:2] - np.array([x, y])) < 0.01
+        assert abs(bottom - float(auxiliary["height"])) < 0.005
+    finally:
+        if arm.held is not None:
+            arm.release()
         scene.close()
 
 
