@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import itertools
+import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,12 +39,19 @@ from src.cell.scene import (  # noqa: E402
     load_configs,
     parking_grid,
 )  # noqa: E402
+from src.cell.stability import count_fallen_boxes  # noqa: E402
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
 from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.planner.naive import BeamPlanner, GridPlanner  # noqa: E402
 from src.telemetry import pallet_state_row, placement_row, run_config  # noqa: E402
+from src.training import (  # noqa: E402
+    PlacementSimulationResult,
+    TrainingLog,
+    resolve_weights,
+    train_weights,
+)
 from src.vision.surface import (  # noqa: E402
     CameraIntrinsics, CameraPose, fuse_max, rasterize_points, unproject_depth,
 )
@@ -176,6 +185,103 @@ def test_the_stability_protocol_is_explicit_and_opt_in() -> None:
     assert len(protocol["levels_g"]) * len(protocol["axes"]) == 15
     assert parser().parse_args([]).stability_test is False
     assert parser().parse_args(["--stability-test"]).stability_test is True
+
+
+def test_stability_counts_box_falls_across_restored_trials() -> None:
+    """La misma caja en dos ensayos son dos fallos, pero un solo id distinto."""
+    package = lambda package_id, fell: {  # noqa: E731
+        "package_id": package_id, "fell_off": fell,
+    }
+    result = {
+        "ran": True,
+        "shake": {"trials": [
+            {"packages": [package("a", True), package("b", False)]},
+            {"packages": [package("a", True), package("b", True)]},
+        ]},
+        "beam": {"trials": [
+            {"packages": [package("a", False), package("b", True)]},
+        ]},
+    }
+    falls = count_fallen_boxes(result)
+    assert falls["total"] == 4
+    assert falls["opportunities"] == 6
+    assert falls["unique_packages"] == 2
+    assert falls["package_ids"] == ["a", "b"]
+    assert falls["by_protocol"] == {"shake": 3, "beam": 1}
+
+
+def test_weight_training_validates_terms_and_flushes_trace_rows() -> None:
+    weights = resolve_weights(CFG, {"pallet_com": 1.25})
+    assert set(weights) == set(METRIC_NAMES)
+    assert weights["pallet_com"] == 1.25
+    try:
+        resolve_weights(CFG, {"invented": 1.0})
+    except ValueError as error:
+        assert "invented" in str(error)
+    else:
+        raise AssertionError("un peso desconocido se aceptó en silencio")
+
+    with tempfile.TemporaryDirectory() as raw:
+        directory = Path(raw) / "trace"
+        directory.mkdir()
+        log = TrainingLog(directory)
+        log.emit("evaluation_progress", evaluation_id="e1", phase="placement", seq=0)
+        row = json.loads(log.progress_path.read_text(encoding="utf-8"))
+        assert row["event"] == "evaluation_progress"
+        assert row["evaluation_id"] == "e1" and row["seq"] == 0
+        relative = log.evaluation("e1", {"fallen_boxes_total": 2})
+        assert relative == "evaluations/e1.json"
+        assert json.loads((directory / relative).read_text())["fallen_boxes_total"] == 2
+
+        def fake_evaluator(weights, *, level, seed, progress, **_kwargs):
+            progress({"phase": "placement", "seq": 0, "status": "placed"})
+            return PlacementSimulationResult(
+                level=level,
+                seed=seed,
+                weights=dict(weights),
+                n_objects=1,
+                n_planned=1,
+                n_placed=1,
+                n_on_pallet=1,
+                failure=None,
+                stability_trials=3,
+                decisions=[],
+                stability={
+                    "ran": True,
+                    "falls": {
+                        "total": 0,
+                        "opportunities": 3,
+                        "unique_packages": 0,
+                        "package_ids": [],
+                        "by_protocol": {"shake": 0, "beam": 0},
+                    },
+                },
+                simulated_seconds=1.0,
+                elapsed_seconds=0.01,
+            )
+
+        training = train_weights(
+            levels=(11,),
+            seeds=(1,),
+            iterations=1,
+            population=2,
+            cfg=CFG,
+            output_directory=Path(raw) / "run",
+            console=None,
+            evaluator=fake_evaluator,
+        )
+        assert training.evaluations == 2 and training.best_loss == 0
+        assert (training.output_directory / "manifest.json").exists()
+        assert (training.output_directory / "config_snapshot.json").exists()
+        assert (training.output_directory / "source_snapshot/src/training.py").exists()
+        assert (training.output_directory / "best_weights.json").exists()
+        events = [
+            json.loads(line)["event"]
+            for line in (training.output_directory / "progress.jsonl").read_text().splitlines()
+        ]
+        assert events.count("evaluation_started") == 2
+        assert events.count("evaluation_finished") == 2
+        assert events[-1] == "training_finished"
 
 
 def test_beam_weights_sum_to_one() -> None:

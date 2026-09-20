@@ -33,7 +33,7 @@ uv run stable-pallet plan --scenario scenarios/mixed_boxes.yaml    # sin física
 uv run stable-pallet simulate --viewer --no-measure-com            # ver la celda
 uv run stable-pallet shake --instant-place --no-measure-com        # solo el palé
 uv run stable-pallet benchmark --trials 20                         # contra first-fit
-uv run pytest                                                      # 200 comprobaciones
+uv run --extra dev pytest                                          # 208 comprobaciones
 ```
 
 El panel muestra catorce tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
