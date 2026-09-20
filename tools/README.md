@@ -36,7 +36,7 @@ uv run stable-pallet benchmark --trials 20                         # contra firs
 uv run pytest                                                      # 200 comprobaciones
 ```
 
-El panel muestra once tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
+El panel muestra trece tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
 modo. **EJECUCIÓN** llama a `scripts/palletize.py` con la fuente y el nivel de la
 tarjeta y puede publicar telemetría. **DEPURACIÓN** llama al mismo entrypoint con
 `--source`, `--level` y `--no-telemetry`: misma escena, sin subir nada.

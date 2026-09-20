@@ -228,6 +228,32 @@ packages:
     friction: [0.95, 0.01, 0.001]
     rgba: [0.72, 0.51, 0.29, 1]
 
+  # ── LOS DOS PEQUEÑOS DEL NIVEL 17, QUE ESTÁN POR DEBAJO DEL SUELO A PROPÓSITO ─
+  #
+  # Los dos incumplen el límite 1 de arriba, y NO es un descuido: el nivel 17 existe
+  # para meter paquetería pequeña en el palé y ver exactamente dónde se rompe. Sus
+  # huellas son las dos que ya se midieron fallando cuando se intentó bajar el suelo
+  # del catálogo —89,4 mm de error al soltar con 0.14 x 0.11, y 22,9 mm con
+  # 0.19 x 0.13, contra una tolerancia de 20 mm—, así que aquí se sabe de antemano
+  # qué va a pasar y por qué.
+  #
+  # Que nadie los «arregle» subiéndolos a 0.24 x 0.18: eso es el nivel 15, y ya está
+  # hecho. Lo que arregla esto es reducir el cuerpo de la herramienta, medir de nuevo
+  # `clearance` alrededor de la HERRAMIENTA en vez de la caja, o una política que
+  # aprenda a dejarle aire al vecino cuando el bulto es más pequeño que la mano.
+  pouch_xs:
+    dims: [0.14, 0.11, 0.08]       # 1,2 L. La huella que se midió a 89,4 mm
+    mass: 0.35                     # 284 kg/m³
+    cog_offset: [0.012, -0.008, -0.008]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.76, 0.57, 0.34, 1]
+  mini_s:
+    dims: [0.19, 0.13, 0.10]       # 2,5 L. La huella que se midió a 22,9 mm
+    mass: 0.65                     # 263 kg/m³
+    cog_offset: [0.016, -0.010, -0.010]
+    friction: [0.95, 0.01, 0.001]
+    rgba: [0.64, 0.43, 0.23, 1]
+
 # El sobre del que se sortea cuando un nivel pide `random`. La masa NO se sortea: es
 # densidad × volumen, que es lo que hace que un bulto grande y ligero y otro pequeño y
 # denso sean problemas distintos.
@@ -322,6 +348,74 @@ levels:
      n_packages: 12, yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue,
      types: [tray_s, tray_s, book_s, flat_m, flat_m, flat_m,
              cube_m, cube_m, cube_m, bulky_l, bulky_l, bulky_xl]}
+
+  # ── LOS DOS QUE NO SE ESPERA QUE SALGAN VERDES ──────────────────────────────
+  #
+  # Los niveles 11-15 están dimensionados para que la heurística LOS APRUEBE. Estos dos
+  # no: son el escalón siguiente, el que la heurística greedy de `placing` no alcanza, y
+  # existen para medir CUÁNTO le falta y por qué. Un rojo aquí es el resultado, no un
+  # fallo de configuración — no los «arregles» bajándoles los bultos.
+  #
+  # Los dos se rompen por motivos DISTINTOS, y ésa es la gracia de tener dos:
+  #
+  #   16  se rompe PLANIFICANDO. Los veinte bultos recorren el catálogo entero, de
+  #       `book_s` a `heavy_l`, y suman el 85 % de la envolvente geométrica (0.45 m³ de
+  #       0.53). Los niveles que salen verdes se quedan en el 47-55 %. Encima, trece
+  #       alturas distintas dejan el montón con un perfil tan picado que
+  #       `min_support_ratio` 0.60 deja a los bultos grandes sin superficie plana mucho
+  #       antes de que el palé se llene. Es el problema clásico de paletizado mixto:
+  #       colocar bien el bulto 18 exige haber colocado distinto el 3, y un planificador
+  #       que decide de uno en uno y no puede deshacer no tiene cómo.
+  #
+  #   17  se rompe MANIPULANDO. Treinta bultos, y la mitad son paquetería pequeña
+  #       —`pouch_xs` y `mini_s`, los dos por debajo del suelo de huella del catálogo—.
+  #       De volumen va sobrado (43 % de la envolvente): lo que falla es que una caja
+  #       más pequeña que la herramienta no tiene forma de bajar junto a un vecino sin
+  #       que el cuerpo del VGP20 lo toque. Ver los dos tipos en el catálogo.
+  #
+  # PARA QUIEN VENGA A MEDIR CONTRA ESTO: la distinción de arriba importa al elegir qué
+  # aprender. El 16 es un problema de DECISIÓN y una política entrenada tiene margen de
+  # sobra —reservar hueco para lo que aún no ha llegado, que es justo lo que un greedy
+  # no hace—. El 17 es en buena parte GEOMETRÍA DE LA HERRAMIENTA: una política puede
+  # aprender a dejarle aire al vecino cuando el bulto es pequeño, y eso recupera parte,
+  # pero el resto no se arregla decidiendo mejor sino cambiando la mano o midiendo de
+  # nuevo `clearance` alrededor de la HERRAMIENTA en vez de alrededor de la caja. Si se
+  # compara una política contra estos dos niveles, conviene no sumar sus números.
+  #
+  # ── LA LÍNEA BASE, PARA QUE HAYA CONTRA QUÉ MEDIR ───────────────────────────
+  #
+  # `ScorePlanner` con el oráculo de visión y de mapa, semillas 1-6, `--no-telemetry`.
+  # Éstos son los números que una política tiene que batir; si alguien toca los pesos de
+  # `heuristic`, se repiten y se actualizan aquí.
+  #
+  #   nivel 16   media 6,7 de 20    3/6 se quedan sin hueco, 3/6 `ik_unreachable`
+  #   nivel 17   media 6,0 de 30    3/6 por deriva al soltar, 2/6 `ik_unreachable`,
+  #                                 1/6 `stack_collapse`
+  #
+  # Y el desglose de por qué el 16 se queda sin hueco, sumando las ventanas rechazadas de
+  # las tres semillas que llegan a ese punto —25.843 `com_unsupported`, 7.267
+  # `max_stack_height`, 6.306 `collision`, 540 `min_support_ratio`—: lo que agota el palé
+  # no es la altura ni el apoyo, es que el CoG del bulto se sale de la huella sobre la
+  # que iría a posarse. Un montón picado no deja dónde apoyar un bulto grande CENTRADO, y
+  # eso se decide veinte colocaciones antes.
+  #
+  # Ojo con una cosa al leer un `ik_unreachable` de estos dos niveles: NO es ruido ajeno a
+  # la decisión. Con `reach_max: 0` el planificador no tiene modelo de alcance, así que
+  # elegir un hueco que el brazo no sostiene es una decisión suya y, por tanto, algo que
+  # una política puede aprender a no hacer. Es de las pocas cosas en las que el greedy
+  # actual no puede mejorar y una entrenada sí, sin tocar la celda.
+  - {id: 16, source: table,    name: "mesa · N6 · el catálogo entero, veinte bultos",
+     n_packages: 20, yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue,
+     types: [book_s, book_s, tray_s, tray_s, small, small, shoe_m, shoe_m,
+             flat_m, flat_m, cube_m, cube_m, std_s, std_s,
+             std_m, bulky_l, apparel, std_l, bulky_xl, heavy_l]}
+  - {id: 17, source: table,    name: "mesa · N7 · paquetería pequeña, treinta bultos",
+     n_packages: 30, yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue,
+     types: [pouch_xs, pouch_xs, pouch_xs, pouch_xs, pouch_xs, pouch_xs, pouch_xs, pouch_xs,
+             mini_s, mini_s, mini_s, mini_s, mini_s, mini_s, mini_s,
+             tray_s, tray_s, tray_s, tray_s, tray_s,
+             book_s, book_s, book_s, book_s,
+             small, small, small, cube_m, cube_m, bulky_xl]}
 
   - {id: 21, source: conveyor, name: "cinta · N1 · un tipo, centrado en la banda",
      n_packages: 4, types: [std_m],  yaw_jitter_deg: 0,  pos_jitter_m: 0.000, cog: centred}

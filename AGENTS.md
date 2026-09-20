@@ -16,8 +16,9 @@ apuntan. El proyecto es MIT (ver `LICENSE`).
 
 Una simulación de paletizado **de verdad**: un UR10e con ventosa OnRobot VGP20 coge
 paquetes de una mesa, una cinta o un remolque, los mide, decide dónde van y los apila
-en un europalé. Hay once niveles seleccionables —cinco de mesa y tres por cada una de
-las otras dos fuentes—. La física es
+en un europalé. Hay trece niveles seleccionables —siete de mesa y tres por cada una de
+las otras dos fuentes—, y los dos últimos de mesa **no se espera que salgan verdes**
+(§6). La física es
 MuJoCo, las métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
 
 El predecesor —`STACKSPECT/Guionized-simulation`— hacía lo mismo con el hueco de cada
@@ -351,6 +352,40 @@ bultos que ningún otro. El nivel 13, que ya estaba, va 3/5 en el mismo barrido 
 Los niveles de este repo están verdes **en la semilla por defecto, no en todas**. Subirlos
 exige medir el alcance del brazo CON CARGA y encender `reach_max`/`reach_min` —trabajo
 aparte, y toca los nueve niveles que ya existen—, no retocar la mezcla.
+
+### Los niveles 16 y 17 están en rojo A PROPÓSITO
+
+Los once primeros están dimensionados para que la heurística los apruebe. **El 16 y el 17
+no**: son el escalón que `placing` no alcanza, y existen para medir cuánto le falta. Un
+rojo ahí es el resultado del experimento, no una configuración rota — **no los arregles
+bajándoles el número de bultos.** Si alguna vez salen verdes sin que nadie los toque, eso
+es la noticia: algo mejoró de verdad.
+
+Línea base medida con `ScorePlanner`, oráculos de visión y mapa, semillas 1-6:
+
+| nivel | bultos | media colocada | cómo se rompe |
+|---|---|---|---|
+| 16 | 20 | 6,7 | 3/6 se queda sin hueco, 3/6 `ik_unreachable` |
+| 17 | 30 | 6,0 | 3/6 deriva al soltar, 2/6 `ik_unreachable`, 1/6 `stack_collapse` |
+
+**Se rompen por motivos distintos y sus números no se suman.** El 16 falla PLANIFICANDO:
+veinte bultos del catálogo entero son el 85 % de la envolvente geométrica —los verdes se
+quedan en 47-55 %— y colocar bien el bulto 18 exige haber colocado distinto el 3, que es
+lo que un planificador incremental sin marcha atrás no puede hacer. El 17 falla
+MANIPULANDO: de volumen va sobrado (43 %), pero la mitad de sus bultos son `pouch_xs` y
+`mini_s`, los dos por debajo del suelo de huella de la celda, y una caja más pequeña que
+la herramienta no baja junto a un vecino sin que el cuerpo del VGP20 lo toque.
+
+Eso importa al decidir qué merece la pena aprender. El 16 es un problema de DECISIÓN y una
+política tiene margen de sobra: reservar hueco para lo que aún no ha llegado es justo lo
+que un greedy no hace. El 17 es en buena parte GEOMETRÍA DE LA HERRAMIENTA, y ahí una
+política recupera parte —aprender a dejarle aire al vecino cuando el bulto es pequeño—
+pero el resto no se arregla decidiendo mejor.
+
+Y un detalle que se lee mal si no se avisa: un `ik_unreachable` en estos niveles **no es
+ruido ajeno a la decisión**. Con `reach_max: 0` el planificador no tiene modelo de
+alcance, así que elegir un hueco que el brazo no sostiene es una decisión suya, y por
+tanto algo que se puede aprender a no hacer sin tocar la celda.
 
 ### El centro de gravedad
 

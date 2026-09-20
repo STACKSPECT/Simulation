@@ -49,9 +49,9 @@ def test_levels_declare_distinct_loads() -> None:
 
 
 def test_scenes_compile_for_all_sources() -> None:
-    # El 15 va aquí y no en el barrido de IK: es el único nivel con los cinco tipos
-    # nuevos del catálogo, y lo que hay que cazar barato es que su MJCF compile.
-    for level in (11, 15, 21, 31):
+    # El 15 y el 17 van aquí y no en el barrido de IK: son los que estrenan tipos de
+    # catálogo, y lo que hay que cazar barato es que su MJCF compile y se asiente.
+    for level in (11, 15, 17, 21, 31):
         scene = build_scene(level_id=level, seed=3, simplified=True)
         try:
             supply = make_supply(scene)
