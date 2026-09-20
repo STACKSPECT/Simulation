@@ -224,11 +224,24 @@ optimistas y la pantalla dice que todo va bien hasta el derrumbe.
   razón que los otros tres: `row.get("decor", "cell")` se traga cualquier nombre y la
   escena saldría con el decorado por defecto sin decir nada. Ver §6.
 
-Y `task` es **la fuente del nivel**: `table`, `conveyor` o `truck` — mesa, cinta y camión,
-que es lo que la interfaz enseña traducido. Sale de `scene.level.source` y no se escribe a
-mano: así las tres tareas se comparan entre sí en vez de ser todas «paletizado». El SDK lo
-valida contra `TASKS`, y el CHECK de `runs`/`episodes` acepta además el histórico
-(`induction`, `palletizing`), que es lo que ya está subido.
+Y `task` es **qué mide el nivel**: `table`, `conveyor`, `truck` o `ajetreo`, que es lo que
+la interfaz enseña traducido. Sale de `scene.level.task` y no se escribe a mano: así las
+tareas se comparan entre sí en vez de ser todas «paletizado». El SDK lo valida contra
+`TASKS`, y el CHECK de `runs`/`episodes` acepta además el histórico (`induction`,
+`palletizing`), que es lo que ya está subido.
+
+**`task` no es `source`**, aunque en las tres primeras coincidan. `source` es de dónde
+salen los bultos y decide qué `Supply` se monta; `task` es qué se está midiendo. Los
+niveles de **ajetreo** (decena 4x) cogen de la mesa y lo que miden es si la pila aguanta
+el transporte: al acabar de colocar pasan por el ensayo de `src/cell/stability.py` sin que
+haya que pedir `--stability-test`. Un nivel declara `task` en `configs/pallet.yaml` y por
+omisión vale su fuente.
+
+> **`ajetreo` todavía no se puede subir.** El SDK lo rechaza con `ValueError: tarea
+> desconocida` y la base tiene su CHECK, así que hasta que se añada en Platform —en
+> `TASKS` y en el SQL— los niveles 4x corren con `--no-telemetry`. Es el caso que describe
+> §5 para los vocabularios cerrados: se le pide a quien lleva el backend, no se inventa
+> aquí.
 
 **`synthetic` no lo escribe esta simulación** (es para datos sembrados), `git_sha` y
 `oracle` van en el run y no se repiten por episodio, y `status` sale de

@@ -165,7 +165,7 @@ def episode_result(episode: Episode, scene) -> EpisodeResult:
         oracle=bool(getattr(scene, "oracle", False)),
         # La tarea es de dónde se coge: mesa, cinta o camión. Sale de la fuente del
         # nivel y no de una constante, que es lo que permite comparar las tres.
-        task=scene.level.source,
+        task=scene.level.task,
         metrics=metrics,
     )
 
