@@ -3,7 +3,7 @@
 ## Qué trae este PR
 
 Este cambio convierte el esqueleto de `Simulation` en una celda autónoma de descarga y
-paletizado con UR10e y ventosa OnRobot VGP20. La ejecución admite nueve niveles —mesa,
+paletizado con UR10e y ventosa OnRobot VGP20. La ejecución admite once niveles —mesa,
 cinta y camión, tres por tarea— definidos en `configs/pallet.yaml`.
 
 - `src/cell/` construye la celda en MJCF, controla el brazo y la ventosa, renderiza las
@@ -79,6 +79,6 @@ estado en vivo requieren `SUPABASE_URL` y `SUPABASE_SERVICE_KEY` en
 
 Además de las fronteras ajenas citadas arriba, faltan la calibración fina de fricción y
 consigna de la cinta bajo cargas adversariales, la validación remota con Supabase y una
-pasada manual por las nueve tarjetas en ambos modos del panel. El contrato, los niveles
+pasada manual por las once tarjetas en ambos modos del panel. El contrato, los niveles
 y los caminos de ejecución quedan preparados para hacer esas comprobaciones sin cambiar
 la arquitectura.

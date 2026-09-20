@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ejecuta la celda autónoma con una de las tres fuentes y nueve niveles."""
+"""Ejecuta la celda autónoma con una de las tres fuentes y once niveles."""
 
 from __future__ import annotations
 

@@ -136,7 +136,7 @@ uv run stable-pallet dashboard          # prints: Panel en http://127.0.0.1:8000
 
 | Control | What it does |
 |---|---|
-| **Experiment picker** | The nine levels, read straight from `configs/pallet.yaml`. Add a level to the YAML and the card appears |
+| **Experiment picker** | The eleven levels, read straight from `configs/pallet.yaml`. Add a level to the YAML and the card appears |
 | **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused |
 | **Speed** | ×0,5 to *máx*, changeable mid-run: the same trajectories, paced differently |
 | **Fast-forward** | Skips the trajectories — the arm jumps waypoint to waypoint — while still simulating what decides the outcome: the release, the settle, the jolts |
@@ -284,7 +284,7 @@ The loop runs end to end on all three sources today. What does not:
 | Wrist gauge | ✅ | Mass and planar CoM recovered |
 | Scoring heuristic | ✅ | The default planner. 15 checks, no simulator |
 | Measurement + live telemetry | ✅ | Rows verified against the schema |
-| Control panel | ✅ | Both modes, nine levels |
+| Control panel | ✅ | Both modes, eleven levels |
 | Height map from cameras | 🟡 | Runs, not at parity: level 11 seed 1 places 3/4 against the oracle's 4/4, ending in `wrong_placement`. Hence `allow_unobserved: true` — coverage over an empty pallet measures 93.3 %, not the 98 % that would justify `false` |
 | **Perception** (`vision/detect.py`) | ❌ | The **only** `NotImplementedError` in the repo |
 | Reachability filter | ❌ | Off — the reach figures in `placing/` are a Panda's, so the planner can pick a slot the arm cannot reach (`ik_unreachable`) |

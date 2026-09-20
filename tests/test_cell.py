@@ -48,7 +48,9 @@ def test_levels_declare_distinct_loads() -> None:
 
 
 def test_scenes_compile_for_all_sources() -> None:
-    for level in (11, 21, 31):
+    # El 15 va aquí y no en el barrido de IK: es el único nivel con los cinco tipos
+    # nuevos del catálogo, y lo que hay que cazar barato es que su MJCF compile.
+    for level in (11, 15, 21, 31):
         scene = build_scene(level_id=level, seed=3, simplified=True)
         try:
             supply = make_supply(scene)
@@ -60,7 +62,7 @@ def test_scenes_compile_for_all_sources() -> None:
 
 
 def test_auxiliary_table_exists_in_all_levels() -> None:
-    """Los nueve niveles montan la misma mesa vacía, además de su propia fuente."""
+    """Todos los niveles montan la misma mesa vacía, además de su propia fuente."""
     cfg = load_configs()
     auxiliary = cfg["auxiliary_table"]
     pallet = cfg["pallet"]

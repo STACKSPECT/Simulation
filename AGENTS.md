@@ -16,7 +16,8 @@ apuntan. El proyecto es MIT (ver `LICENSE`).
 
 Una simulación de paletizado **de verdad**: un UR10e con ventosa OnRobot VGP20 coge
 paquetes de una mesa, una cinta o un remolque, los mide, decide dónde van y los apila
-en un europalé. Hay nueve niveles seleccionables —tres por fuente—. La física es
+en un europalé. Hay once niveles seleccionables —cinco de mesa y tres por cada una de
+las otras dos fuentes—. La física es
 MuJoCo, las métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
 
 El predecesor —`STACKSPECT/Guionized-simulation`— hacía lo mismo con el hueco de cada
@@ -289,7 +290,7 @@ estación y se para. El camión presenta la carga completa y elige siempre la ca
 alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
 encima de la fuente.
 
-Además de la fuente, **los nueve niveles montan una mesa auxiliar vacía** a la derecha
+Además de la fuente, **todos los niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
 el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
 camino del código**; se acepta a propósito como superficie disponible. Deja 50 mm de aire
@@ -317,6 +318,38 @@ Dos avisos:
   y si eso lo deja con medio cuerpo en el aire vuelca, retrocede o se cae — no falla la
   ventosa, falla la geometría. Por delante de la estación tiene que quedar al menos la
   semihuella GIRADA del bulto más largo del catálogo. Las cifras, en `configs/scene.yaml`.
+
+### La envolvente del catálogo, que es más estrecha de lo que parece
+
+Los ocho tipos de `configs/pallet.yaml` no son un surtido: son **casi exactamente** lo
+que esta celda sabe manipular. Salirse por cualquiera de los dos extremos falla, y falla
+tarde. Medido añadiendo los niveles 14 y 15; las tablas están en la cabecera del catálogo.
+
+- **`book_s` (0.24 × 0.18) ya es la caja más pequeña que se puede DEJAR.** No lo limita el
+  agarre —las ventosas sobran— sino el cuerpo del VGP20: mide 264 × 184 mm y la holgura
+  del planificador son 40 mm *alrededor de la caja*, no de la herramienta. Con la caja más
+  corta que 264 − 2·40 = 184 mm el anillo deja de tapar al cuerpo, la caja entra en su
+  hueco y la herramienta pisa al vecino al bajar. Error al soltar junto a un vecino:
+  89,4 mm con 0.14 × 0.11, 22,9 mm con 0.19 × 0.13, 2,1 mm con 0.24 × 0.18.
+- **Nada por debajo de 0.10 de alto.** Una caja de 0.06 deja el TCP a 0.205 m al depositar
+  sobre la cubierta, y el canto del palé más cercano al pedestal cae a 0.42 m de él: justo
+  la banda donde el brazo no SOSTIENE la pose. Con `reach_max: 0` el filtro de alcance está
+  apagado, así que el planificador elige ese hueco igual y el episodio muere en
+  `ik_unreachable`.
+- **Lo que importa de una mezcla no es cuántos bultos tiene, sino qué fracción mide 0.10
+  de alto**, porque cada uno de ésos es un dado contra esa banda. Con 12 bultos y 8
+  semillas: 9 bajos de 12 dan 2/8 episodios en verde; 3 bajos de 12 dan 5/8. Reparte las
+  alturas como están repartidas las de los ocho originales.
+- **Cuadrar las alturas en cursos NO compensa.** Ayuda al apoyo —`min_support_ratio` 0.60
+  pide el 60 % de la huella apoyada a una misma altura, y un montón con doce bandas deja a
+  una caja grande sin una sola ventana válida con el palé al 44 %— pero amontona
+  colocaciones en la banda muerta y sale más caro de lo que ahorra.
+
+Los dos techos son **preexistentes**: se ven en los niveles nuevos sólo porque colocan más
+bultos que ningún otro. El nivel 13, que ya estaba, va 3/5 en el mismo barrido de semillas.
+Los niveles de este repo están verdes **en la semilla por defecto, no en todas**. Subirlos
+exige medir el alcance del brazo CON CARGA y encender `reach_max`/`reach_min` —trabajo
+aparte, y toca los nueve niveles que ya existen—, no retocar la mezcla.
 
 ### El centro de gravedad
 
