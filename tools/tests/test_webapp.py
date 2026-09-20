@@ -93,11 +93,13 @@ def post(base: str, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, 
 # -- the catalogue ---------------------------------------------------------------------
 
 
-def test_the_catalogue_offers_the_nine_declared_levels() -> None:
+def test_the_catalogue_offers_the_declared_levels() -> None:
+    """Listados a mano a propósito: derivarlos del YAML dejaría de ver un nivel perdido."""
     catalogue = _catalogue()
     assert [item["key"] for item in catalogue] == [
-        "level-11", "level-12", "level-13", "level-21", "level-22",
-        "level-23", "level-31", "level-32", "level-33",
+        "level-11", "level-12", "level-13", "level-14", "level-15", "level-16",
+        "level-17", "level-21", "level-22", "level-23", "level-31", "level-32",
+        "level-33",
     ]
     for entry in catalogue:
         assert entry["title"] and entry["description"]
@@ -208,9 +210,19 @@ def test_the_catalogue_is_served_with_the_speed_presets(served: Any) -> None:
     base, _ = served
     _, body = get(base, "/api/experiments")
     payload = json.loads(body)
-    assert len(payload["experiments"]) == 9
+    assert len(payload["experiments"]) == len(_catalogue())
     assert ["x1", 1.0] in payload["speeds"]
     assert payload["modes"] == ["execution", "debug"]
+
+
+def test_the_page_carries_the_view_switch(served: Any) -> None:
+    """Las tarjetas se agrupan y se ven en lista o en cuadrícula, y eso vive entero en el
+    navegador: el servidor sólo tiene que servir el conmutador y sus iconos."""
+    base, _ = served
+    page = get(base, "/")[1]
+    assert b'id="views"' in page
+    assert b'data-view="grid"' in page and b'data-view="list"' in page
+    assert b'id="i-grid"' in page and b'id="i-list"' in page
 
 
 def test_a_run_reaches_the_runner_with_the_settings_the_page_chose(served: Any, runner: type[FakeRunner]) -> None:
