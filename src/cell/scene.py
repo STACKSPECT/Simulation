@@ -55,7 +55,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from src.cell import TCP_SITE, add_table, lookat_quat
+from src.cell import TCP_SITE, add_table, lookat_quat, plant
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -120,6 +120,7 @@ class Level:
     pos_jitter_m: float = 0.0
     cog: str = "catalogue"           # centred | catalogue | adversarial
     loader_jitter: bool = False
+    decor: str = "cell"              # cell | plant — ver DECORS
 
     @property
     def task_index(self) -> int:
@@ -128,6 +129,15 @@ class Level:
 
 SOURCES = ("table", "conveyor", "truck")
 SOURCE_DECADE = {"table": 1, "conveyor": 2, "truck": 3}
+
+# El decorado del nivel, y con él su iluminación: los dos van juntos porque una nave con
+# las luces de un plató no es una nave. `cell` es la valla de seguridad y las marcas de
+# suelo de siempre; `plant` es la planta industrial de `src/cell/plant.py`.
+#
+# Es un vocabulario CERRADO, como `source`, `cog`, `events.kind` y `snapshots.view`. Un
+# nombre inventado aquí no daría error donde se escribe —`row.get` se lo tragaría— y la
+# escena saldría con el decorado por defecto sin decir nada.
+DECORS = ("cell", "plant")
 
 # Cada cuánto se refresca el visor, en segundos de reloj de pared. Ver `sync_viewer`.
 FRAME_SECONDS = 1.0 / 60.0
@@ -167,9 +177,12 @@ def levels(cfg: dict) -> dict[int, Level]:
             pos_jitter_m=float(row.get("pos_jitter_m", 0.0)),
             cog=str(row.get("cog", "catalogue")),
             loader_jitter=bool(row.get("loader_jitter", False)),
+            decor=str(row.get("decor", "cell")),
         )
         if level.source not in SOURCES:
             raise ValueError(f"nivel {level.id}: fuente desconocida {level.source!r}")
+        if level.decor not in DECORS:
+            raise ValueError(f"nivel {level.id}: decorado desconocido {level.decor!r}")
         if level.task_index != SOURCE_DECADE[level.source]:
             raise ValueError(
                 f"nivel {level.id}: la decena no casa con la fuente {level.source!r}. "
@@ -795,6 +808,32 @@ def _industrial_xml(simplified: bool) -> str:
     return f"{posts}\n{rails}\n{markings}"
 
 
+def _decor_xml(cfg: dict, level: Level, simplified: bool) -> str:
+    """El decorado del nivel. Ver `DECORS`."""
+    if level.decor == "plant":
+        return plant.decor_xml(cfg, simplified)
+    return _industrial_xml(simplified)
+
+
+def _floor_xml(cfg: dict, level: Level) -> str:
+    """El suelo.
+
+    La fricción y la clase de contacto son las mismas SIEMPRE: lo único que cambia con el
+    decorado es la pinta. Con la nave, además, el plano se recorta a su planta de 8 × 6 m
+    y se desplaza con ella, porque un plano de 12 × 12 asoma por fuera de las paredes y
+    se ve en la `iso`.
+    """
+    if level.decor == "plant":
+        offset_x, offset_y = (float(value) for value in cfg["plant"]["offset"])
+        look = f'pos="{offset_x} {offset_y} 0" size="4 3 0.1" material="plant_concrete"'
+    else:
+        look = 'size="6 6 0.1" material="floor_mat"'
+    return (
+        f'    <geom name="floor" type="plane" {look}\n'
+        f'          friction="1.0 0.01 0.001" conaffinity="{SOLID}"/>'
+    )
+
+
 def _camera_xml(name: str, spec: dict) -> str:
     quat = lookat_quat(spec["position"], spec["lookat"], spec.get("up", (0.0, 0.0, 1.0)))
     position = " ".join(str(value) for value in spec["position"])
@@ -839,13 +878,23 @@ def _cameras_xml(cfg: dict) -> str:
     return "\n".join(out)
 
 
-def _lighting_xml(cfg: dict) -> str:
+def lighting_for(cfg: dict, level: Level) -> dict:
+    """El bloque de luz de este decorado. Los dos declaran las mismas claves `headlight_*`."""
+    return cfg["plant"]["lighting"] if level.decor == "plant" else cfg["lighting"]
+
+
+def _lighting_xml(cfg: dict, level: Level) -> str:
     """Iluminación de esta escena.
 
     La cenital ve caras horizontales y satura; el alzado ve verticales y sale a oscuras.
     El `fill` diagonal es lo que arregla el segundo sin romper el primero. Las medias RGB
     medidas están en la cabecera de `configs/pallet.yaml`.
+
+    Con `decor: plant` el rig es otro —y con sus propias medias medidas— porque la nave
+    tiene luminarias y ventanas y la celda desnuda no. Lo escribe `src/cell/plant.py`.
     """
+    if level.decor == "plant":
+        return plant.lighting_xml(cfg)
     light = cfg["lighting"]
     overhead = " ".join(str(value) for value in light["overhead_diffuse"])
     spot = " ".join(str(value) for value in light["spot_diffuse"])
@@ -892,7 +941,8 @@ def build_mjcf(
         else "\n    ".join(f'<mesh name="{name}" file="{name}.obj"/>' for name in UR10E_MESHES)
     )
     ped = cfg["pedestal"]
-    light = cfg["lighting"]
+    light = lighting_for(cfg, level)
+    materials = _MATERIALS + (plant.materials_xml() if level.decor == "plant" else "")
     episode = cfg["episode"]
 
     return f"""<mujoco model="celda de paletizado UR10e · {level.name}">
@@ -926,18 +976,17 @@ def build_mjcf(
                diffuse="{light['headlight_diffuse']} {light['headlight_diffuse']} {light['headlight_diffuse']}"
                specular="{light['headlight_specular']} {light['headlight_specular']} {light['headlight_specular']}"/>
   </visual>
-  <asset>{_MATERIALS}
+  <asset>{materials}
     {meshes}
   </asset>
-  <worldbody>{_lighting_xml(cfg)}
+  <worldbody>{_lighting_xml(cfg, level)}
 {_cameras_xml(cfg)}
-    <geom name="floor" type="plane" size="6 6 0.1" material="floor_mat"
-          friction="1.0 0.01 0.001" conaffinity="{SOLID}"/>
+{_floor_xml(cfg, level)}
     <geom name="pedestal" type="cylinder" pos="{ped['center'][0]} {ped['center'][1]} {ped['height'] / 2}"
           size="{ped['radius']} {ped['height'] / 2}" rgba="0.22 0.25 0.28 1" conaffinity="{SOLID}"/>
 {source_fixture}
 {auxiliary_table}
-{_industrial_xml(simplified)}
+{_decor_xml(cfg, level, simplified)}
 {_stability_beam_xml(cfg)}
 {_pallet_xml(cfg, simplified)}
 {_ur10e_xml(cfg, _cups_xml(cfg, simplified), carried, simplified)}

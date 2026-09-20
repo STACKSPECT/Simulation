@@ -131,12 +131,12 @@ uv run stable-pallet dashboard          # prints: Panel en http://127.0.0.1:8000
 ```
 
 <div align="center">
-  <img src="docs/img/control-panel.png" alt="The run control panel: a nine-level experiment picker on the left with playback transport and a log pane, mode, speed, centre-of-mass and start-up controls on the right, and a DEPURACIÓN · SIN TELEMETRÍA badge in the header" width="900">
+  <img src="docs/img/control-panel.png" alt="The run control panel: a twelve-level experiment picker on the left with playback transport and a log pane, mode, speed, centre-of-mass and start-up controls on the right, and a DEPURACIÓN · SIN TELEMETRÍA badge in the header" width="900">
 </div>
 
 | Control | What it does |
 |---|---|
-| **Experiment picker** | The thirteen levels, read straight from `configs/pallet.yaml`. Add a level to the YAML and the card appears |
+| **Experiment picker** | The fourteen levels, read straight from `configs/pallet.yaml`. Add a level to the YAML and the card appears |
 | **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused |
 | **Speed** | ×0,5 to *máx*, changeable mid-run: the same trajectories, paced differently |
 | **Fast-forward** | Skips the trajectories — the arm jumps waypoint to waypoint — while still simulating what decides the outcome: the release, the settle, the jolts |
@@ -232,13 +232,25 @@ the tool weighs 2.55 kg, so the package ceiling is 8.5 kg. The pallet is a real 
 [`configs/scene.yaml`](configs/scene.yaml) and [`configs/pallet.yaml`](configs/pallet.yaml)
 — if you change one, write down how you measured it.
 
-Three sources, one contract (`Supply.present()` / `release()`), three levels each:
+Three sources, one contract (`Supply.present()` / `release()`), fourteen levels. The tens
+digit is the source, so the platform can tell a table N2 from a truck N2 with the single
+integer it stores per episode:
 
-| | N1 | N2 | N3 |
-|---|---|---|---|
-| **Table** — staged, nothing moves | `11` one type, aligned | `12` mixed, rotated | `13` random, adversarial CoG |
-| **Conveyor** — stops on *measured* rest | `21` one type, centred | `22` mixed, off-centre | `23` random, variable spacing |
-| **Truck** — whole load, highest box only | `31` ordered columns | `32` the loader's disorder | `33` random, adversarial CoG |
+| | N1 | N2 | N3 | N4 | N5 | N6 | N7 |
+|---|---|---|---|---|---|---|---|
+| **Table** — staged, nothing moves | `11` one type, aligned | `12` mixed, rotated | `13` random, adversarial CoG | `14` the known mix, a fuller pallet | `15` wider catalogue, five new shapes | `16` the whole catalogue, 20 cartons | `17` small parcels, 30 cartons |
+| **Conveyor** — stops on *measured* rest | `21` one type, centred | `22` mixed, off-centre | `23` random, variable spacing | | | | |
+| **Truck** — whole load, highest box only | `31` ordered columns | `32` the loader's disorder | `33` random, adversarial CoG | `34` the same load, inside an industrial plant | | | |
+
+`16` and `17` are **red on purpose** — they are the step the current heuristic does not
+reach, and they exist to measure how far short it falls. Do not "fix" them by lowering
+their carton count. See `AGENTS.md` §6.
+
+Level `34` is `33` with `decor: plant` and nothing else changed — same eight cartons, same
+draw, same adversarial CoG, same loader disorder — so running both on one seed isolates what
+the scenery costs. It should cost nothing: the plant is non-colliding backdrop, and the two
+episodes come out identical to the last decimal. What it does change is the light, which has
+its own measured table in `configs/pallet.yaml`. See `src/cell/plant.py`.
 
 Each type carries a `cog_offset_m`: the centre of mass is *not* the geometric centre.
 `vision/gauge.py` estimates it from one plumb wrist reading — the horizontal components come
@@ -284,7 +296,7 @@ The loop runs end to end on all three sources today. What does not:
 | Wrist gauge | ✅ | Mass and planar CoM recovered |
 | Scoring heuristic | ✅ | The default planner. 15 checks, no simulator |
 | Measurement + live telemetry | ✅ | Rows verified against the schema |
-| Control panel | ✅ | Both modes, thirteen levels |
+| Control panel | ✅ | Both modes, fourteen levels |
 | Height map from cameras | 🟡 | Runs, not at parity: level 11 seed 1 places 3/4 against the oracle's 4/4, ending in `wrong_placement`. Hence `allow_unobserved: true` — coverage over an empty pallet measures 93.3 %, not the 98 % that would justify `false` |
 | **Perception** (`vision/detect.py`) | ❌ | The **only** `NotImplementedError` in the repo |
 | Reachability filter | ❌ | Off — the reach figures in `placing/` are a Panda's, so the planner can pick a slot the arm cannot reach (`ik_unreachable`) |

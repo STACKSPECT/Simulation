@@ -16,9 +16,9 @@ apuntan. El proyecto es MIT (ver `LICENSE`).
 
 Una simulación de paletizado **de verdad**: un UR10e con ventosa OnRobot VGP20 coge
 paquetes de una mesa, una cinta o un remolque, los mide, decide dónde van y los apila
-en un europalé. Hay trece niveles seleccionables —siete de mesa y tres por cada una de
-las otras dos fuentes—, y los dos últimos de mesa **no se espera que salgan verdes**
-(§6). La física es
+en un europalé. Hay catorce niveles seleccionables —siete de mesa, tres de cinta y
+cuatro de camión—, y los dos últimos de mesa **no se espera que salgan verdes** (§6).
+La física es
 MuJoCo, las métricas se miden y todo se sube en vivo a la plataforma de observabilidad.
 
 El predecesor —`STACKSPECT/Guionized-simulation`— hacía lo mismo con el hueco de cada
@@ -208,7 +208,7 @@ criterio es geométrico —¿su huella toca el palé?—, no "¿falló la maniob
 huellas de la capa 1, no contra el borde del palé. Contra el palé los números salen
 optimistas y la pantalla dice que todo va bien hasta el derrumbe.
 
-**Tres vocabularios cerrados.** Inventar un valor no da error donde lo escribes:
+**Cuatro vocabularios cerrados.** Inventar un valor no da error donde lo escribes:
 
 - `events.kind`: `perceive | plan | pick | place | settle | fail`. **No hay kind para la
   cinta** (ver §6).
@@ -219,6 +219,10 @@ optimistas y la pantalla dice que todo va bien hasta el derrumbe.
   `wrong_placement`, `timeout`, `stack_collapse`, `overhang_violation`. `EpisodeResult`
   lanza `ValueError` con cualquier otro, a propósito. Añadir uno obliga a tocar tres
   sitios en Platform: pídeselo a quien lleve el backend, no lo inventes aquí.
+- `levels[].decor`: `cell | plant`. Éste no lo valida la plataforma —no sube como
+  columna, va dentro de `runs.config`— pero lo valida `scene.levels()`, y por la misma
+  razón que los otros tres: `row.get("decor", "cell")` se traga cualquier nombre y la
+  escena saldría con el decorado por defecto sin decir nada. Ver §6.
 
 Y `task` es **la fuente del nivel**: `table`, `conveyor` o `truck` — mesa, cinta y camión,
 que es lo que la interfaz enseña traducido. Sale de `scene.level.source` y no se escribe a
@@ -292,16 +296,23 @@ estación y se para. El camión presenta la carga completa y elige siempre la ca
 alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
 encima de la fuente.
 
-Además de la fuente, **todos los niveles montan una mesa auxiliar vacía** a la derecha
+Además de la fuente, **los doce niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
 el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
-camino del código**; se acepta a propósito como superficie disponible. Deja 50 mm de aire
-hasta el palé para no contaminar su medida.
+camino del código**; se acepta a propósito como superficie disponible. Deja **100 mm de
+aire** hasta el palé para no contaminar su medida — y eso es más importante de lo que
+suena: su cara superior está 436 mm POR ENCIMA de la cubierta, así que desde el punto de
+vista del brazo es una pared, no una mesa. Con los 50 mm que tenía antes, la herramienta
+bajaba pegada a ella sobre los huecos de canto —que son justo los que mejor puntúa el
+planificador— y tiraba la carga: nivel 33, semilla 1, `--speed 1`, la cuarta caja medida
+a 1674 mm y `stack_collapse`. **En fast-forward no se ve**, porque el brazo teletransporta
+entre waypoints; el visor y el panel sí corren el tramo que roza. Ver la cabecera de
+`auxiliary_table` en `configs/scene.yaml`, que trae el barrido entero.
 
 Lo comprobado de esa mesa es **su centro, no su huella**: cabe ahí el bulto máximo
-girado, y `tests/test_cell.py` deja un bulto reposando en él de verdad. El 28 % de la
-huella queda fuera del alcance del UR10e —la esquina lejana está a 1,576 m contra 1,300
-de alcance—, así que una estrategia que quiera soltar fuera del centro tiene que repetir
+girado, y `tests/test_cell.py` deja un bulto reposando en él de verdad. Parte de la
+huella queda fuera del alcance del UR10e —68 de 81 celdas a la cota de suelta, 54 de 81
+a la de aproximación—, así que una estrategia que quiera soltar fuera del centro tiene que repetir
 antes el barrido de IK. Las cifras y el barrido están en `configs/scene.yaml`.
 
 Dos avisos:
@@ -351,7 +362,7 @@ Los dos techos son **preexistentes**: se ven en los niveles nuevos sólo porque 
 bultos que ningún otro. El nivel 13, que ya estaba, va 3/5 en el mismo barrido de semillas.
 Los niveles de este repo están verdes **en la semilla por defecto, no en todas**. Subirlos
 exige medir el alcance del brazo CON CARGA y encender `reach_max`/`reach_min` —trabajo
-aparte, y toca los nueve niveles que ya existen—, no retocar la mezcla.
+aparte, y toca los niveles que ya existen—, no retocar la mezcla.
 
 ### Los niveles 16 y 17 están en rojo A PROPÓSITO
 
@@ -499,6 +510,40 @@ lo necesita: el resumen va dentro de `metrics` del episodio (≈0.5 KB, que es `
 donde sobrar es inocuo) y el detalle de las 17 pruebas a `stability.json` en el
 directorio del run, que no llega a la base.
 
+### El decorado
+
+`levels[].decor` dice en qué sitio pasa el nivel. Es un vocabulario cerrado de dos
+—`cell | plant`— y arrastra el DECORADO y LA LUZ a la vez, porque una nave con las luces
+de un plató no es una nave.
+
+- **`cell`** es lo de siempre, y el valor por defecto: valla de seguridad, marcas de
+  suelo, suelo de damero y las tres luces de `lighting:`. Los once niveles que ya había
+  no se enteran de que esto existe.
+- **`plant`** monta la planta industrial de `src/cell/plant.py` alrededor de la celda:
+  paredes, ventanas, luminarias, estantería, depósitos, banco y señalización. Hoy sólo
+  lo usa el nivel 34.
+
+Cuatro cosas que conviene tener claras antes de tocarlo:
+
+1. **El decorado es un FONDO y no colisiona.** Ni un geom de la nave tiene contacto, y
+   ése es el motivo de que el 33 y el 34 salgan idénticos hasta el último decimal con la
+   misma semilla. Si algún día algo de la nave tiene que ser sólido, deja de ser gratis:
+   hay que volver a barrer el alcance y volver a medir los dos episodios.
+2. **La nave viene de fuera.** `assets/planta_industrial_v2.xml` es una COPIA de una
+   exportación de Blender que vive en `~/Descargas/planta_industrial/`, y allí
+   `export_mujoco.py` la sobrescribe cada vez que alguien re-exporta. La del repo es la
+   que manda. `plant.py` se queda sólo con su `<worldbody>` y tira sus luces, su cámara,
+   su suelo y sus tres cuerpos libres — los cuatro chocan con esta celda, y los cuatro
+   fallarían tarde. El porqué de cada uno está en la cabecera del módulo.
+3. **Cada decorado trae sus propias medias medidas.** No hay una tabla de saturación,
+   hay dos: la de `lighting:` y la de `plant.lighting:`, cada una con su barrido. Cambiar
+   la luz de un decorado NO invalida la del otro, y ésa es la razón de separarlas en vez
+   de parametrizar una sola.
+4. **Las direccionales de la nave no proyectan sombra.** El mapa de sombras es uno para
+   toda la escena, y con la nave alrededor la extensión pasa de 4 m a 14: una direccional
+   se queda con menos de una décima parte de los téxeles y sale escalonada por las
+   paredes. La sombra la hacen las tres luminarias, que son locales.
+
 ## 7. Lo que se porta, y no se reescribe
 
 El robot ya está decidido: **UR10e + OnRobot VGP20**. La ejecución procede del
@@ -532,8 +577,11 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
   frontera: el resto del código no debería conocer el nombre de ninguna columna. Lo que
   cruza los módulos son objetos de `contracts.py`, no filas.
 - **No reimplementes `stability_margin` ni `support_polygon`.** Vienen del SDK.
-- **No inventes `kind`s de evento, vistas de foto ni causas de fallo.** Los tres son
-  vocabularios cerrados y los tres fallan tarde y en silencio.
+- **No inventes `kind`s de evento, vistas de foto, causas de fallo ni decorados.** Los
+  cuatro son vocabularios cerrados y los cuatro fallan tarde y en silencio.
+- **No des contacto al decorado.** La nave de `src/cell/plant.py` es un fondo: si empieza
+  a chocar, deja de ser gratis y el codo se engancha en un depósito. Y no re-exportes su
+  XML encima del de `assets/`: el de `~/Descargas` lo pisa Blender, el del repo manda.
 - **No hagas que un módulo lea la escena por su cuenta.** Si `heuristic.py` importa
   `mujoco`, algo se ha torcido: lo que necesita es el `Heightmap` y el `PackageSpec`. La
   excepción son los stubs-oráculo, que existen precisamente para hacer trampa, y por eso

@@ -51,7 +51,13 @@ def test_levels_declare_distinct_loads() -> None:
 def test_scenes_compile_for_all_sources() -> None:
     # El 15 y el 17 van aquí y no en el barrido de IK: son los que estrenan tipos de
     # catálogo, y lo que hay que cazar barato es que su MJCF compile y se asiente.
-    for level in (11, 15, 17, 21, 31):
+    #
+    # El 34 va por lo mismo y por otra razón: es el único con `decor: plant`, y su MJCF
+    # trae 122 geoms de una exportación ajena. Ojo, `simplified=True` NO monta el atrezo
+    # —el decorado se salta, como la valla—, así que lo que esta prueba ancla es el
+    # resto: los materiales de la nave en el `<asset>`, su suelo recortado y su rig de
+    # cinco luces. Que el atrezo entero compile lo cubre el barrido de abajo.
+    for level in (11, 15, 17, 21, 31, 34):
         scene = build_scene(level_id=level, seed=3, simplified=True)
         try:
             supply = make_supply(scene)

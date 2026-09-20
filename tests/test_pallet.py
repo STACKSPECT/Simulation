@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,8 +23,17 @@ from scripts.palletize import (  # noqa: E402
     parser,
 )
 from src import measure  # noqa: E402
+from src.cell import plant  # noqa: E402
 from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
-from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
+from src.cell.scene import (  # noqa: E402
+    DECORS,
+    SOURCE_DECADE,
+    SOURCES,
+    Level,
+    levels,
+    lighting_for,
+    load_configs,
+)
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
 from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
@@ -90,11 +100,51 @@ def test_views_and_failures_match_the_schema() -> None:
 
 def test_level_ids_encode_the_source() -> None:
     catalogue = levels(CFG)
-    assert len(catalogue) == 13
-    assert len(set(catalogue)) == 13
+    assert len(catalogue) == 14
+    assert len(set(catalogue)) == 14
     assert {level.source for level in catalogue.values()} == set(SOURCES)
     for level in catalogue.values():
         assert level.id // 10 == SOURCE_DECADE[level.source]
+        assert level.decor in DECORS
+
+
+def test_the_plant_only_lends_its_scenery() -> None:
+    """Lo que la nave NO puede traerse a la celda. Ver `src/cell/plant.py`.
+
+    Sin simulador: la exportación de Blender es un fichero ajeno que alguien puede
+    regenerar, y las cinco cosas de abajo fallan tarde y en silencio si se cuela una.
+    """
+    decor = plant.decor_xml(CFG, simplified=False)
+    assert "<freejoint" not in decor      # metería 21 qpos ajenos al episodio
+    assert "<light" not in decor          # el rig lo escribe plant.lighting_xml
+    assert "<camera" not in decor         # `overview` no está en VIEWS: 23514
+    assert "<body" not in decor           # todo el atrezo es estático
+    assert 'name="plant_floor"' not in decor   # el suelo lo pone la celda
+
+    names = re.findall(r'<geom name="([^"]+)"', decor)
+    assert len(names) == len(set(names)), "nombre repetido en el decorado"
+    assert all(name.startswith("plant_") for name in names)
+    # Sin contacto: es un fondo, no mobiliario.
+    assert decor.count('contype="0" conaffinity="0"') == len(names)
+
+    # Y que la paleta del fichero siga siendo la que hay declarada: si se re-exporta la
+    # nave con colores nuevos, `plant.decor_xml` ya habría lanzado al llegar aquí.
+    mjcf = CFG["_root"] / CFG["plant"]["mjcf"]
+    used = set(re.findall(r'rgba="([^"]+)"', mjcf.read_text(encoding="utf-8")))
+    assert used <= set(plant.MATERIAL_FOR_RGBA), sorted(used - set(plant.MATERIAL_FOR_RGBA))
+
+
+def test_the_plant_decor_does_not_change_the_other_levels() -> None:
+    """`decor` es un vocabulario cerrado y su defecto es la celda de siempre."""
+    catalogue = levels(CFG)
+    assert catalogue[34].decor == "plant"
+    assert {level.decor for level in catalogue.values() if level.id != 34} == {"cell"}
+    # Cada decorado trae sus propias medias medidas, y los dos declaran el headlight.
+    for level in (catalogue[33], catalogue[34]):
+        light = lighting_for(CFG, level)
+        assert {"headlight_diffuse", "headlight_ambient", "headlight_specular"} <= set(light)
+    assert lighting_for(CFG, catalogue[33]) is CFG["lighting"]
+    assert lighting_for(CFG, catalogue[34]) is CFG["plant"]["lighting"]
 
 
 def test_the_stability_protocol_is_explicit_and_opt_in() -> None:
