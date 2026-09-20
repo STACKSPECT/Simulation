@@ -99,13 +99,29 @@ table:
 # disponible para que el robot aparte un bulto si una estrategia futura lo necesita.
 #
 # Está a la derecha del palé, separada 50 mm de su canto (x=1.20), y por eso no falsea
-# ni la medida del montón ni `measure.on_pallet`. La superficie útil de 0.50 x 0.66 m
-# admite el bulto máximo del generador (0.55 x 0.40 m) girado 90 grados. Su centro se
-# comprobó con IK a la cota de suelta y a la de aproximación del bulto más alto.
+# ni la medida del montón ni `measure.on_pallet`.
+#
+# ── LA HUELLA ES 0.50 x 0.66 m, PERO NO TODA ESTÁ AL ALCANCE ───────────────────
+# Barrido de IK sobre una rejilla 9x9 de la huella, a la cota de suelta del bulto más
+# alto (z = 0.883) y con la herramienta girada 90 grados: 58 de 81 alcanzables. El
+# 28 % de la huella NO la alcanza el brazo — la esquina lejana (1.75, +0.28) queda a
+# 1.576 m de la base contra los 1.300 m de alcance del UR10e. Lo verificado, y lo
+# único que hay que usar, es EL CENTRO: llega con holgura (1.265 m a la cota de
+# aproximación) y admite el bulto máximo del generador (0.55 x 0.40 m) girado 90
+# grados. Si alguna estrategia futura quiere depositar fuera del centro, tiene que
+# repetir este barrido antes.
+#
+# El centro no se queda en el IK: `tests/test_cell.py` sella un bulto y lo deja
+# reposando ahí de verdad (`test_robot_can_leave_a_package_on_the_auxiliary_table`).
+# Medido con `cartesian_speed: 1.50` (ver `motion`): error XY de 2.4 mm con el `std_m`
+# del test y de 3.3 mm con el bulto máximo, contra una tolerancia de 10 mm; desvío en
+# Z de 0.1 mm contra 5 mm.
 auxiliary_table:
   center: [1.50, -0.05]
   size: [0.25, 0.33, 0.04]        # SEMIEJES; huella x[1.25, 1.75], y[-0.38, 0.28]
-  height: 0.58
+  height: 0.58                    # la misma cota que la mesa de recogida (arriba), a
+                                  # propósito: una sola altura de suelta reaprovecha su
+                                  # barrido de alcance. No se midió por separado.
   friction: [0.9, 0.01, 0.001]
   rgba: [0.20, 0.38, 0.48, 1]
 

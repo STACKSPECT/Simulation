@@ -25,6 +25,7 @@ from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E40
 from src.cell.scene import SOURCE_DECADE, SOURCES, Level, levels, load_configs  # noqa: E402
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
+from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.planner.naive import BeamPlanner, GridPlanner  # noqa: E402
 from src.telemetry import pallet_state_row, placement_row, run_config  # noqa: E402
@@ -109,6 +110,47 @@ def test_heuristic_weights_are_the_fourteen_terms() -> None:
     weights = CFG["heuristic"]["weights"]
     assert set(weights) == set(METRIC_NAMES), set(weights) ^ set(METRIC_NAMES)
     assert all(value >= 0.0 for value in weights.values())
+
+
+def test_static_obstacles_stamp_the_named_tables_of_the_level() -> None:
+    """El oráculo estampa DOS mesas por su nombre, y la de recogida sólo si se monta.
+
+    Hoy ninguna de las dos pisa la huella del palé (60 mm de aire la de recogida, 50 mm
+    la auxiliar), así que sin mover nada se estampan cero celdas: eso es lo primero que
+    se comprueba, porque es lo que deja de ser cierto si alguien retoca `scene.yaml`.
+    Luego se mueven las dos a mano sobre la cubierta para ejercitar el gate, que es la
+    única lógica nueva y la que no tendría red de otro modo.
+    """
+    grid = _empty_pallet_map()
+    ny, nx = grid.cells.shape
+    deck_z = float(CFG["pallet"]["deck_thickness"])
+
+    def stamp(source: str, cfg: dict) -> np.ndarray:
+        cells = np.zeros((ny, nx))
+        scene = SimpleNamespace(cfg=cfg, deck_z=deck_z, level=SimpleNamespace(source=source))
+        _stamp_static_obstacles(scene, cells, grid.origin, grid.cell_size, nx, ny)
+        return cells
+
+    for source in SOURCES:
+        assert stamp(source, CFG).max() == 0.0, f"{source}: una mesa invade la huella del palé"
+
+    # Las dos corridas sobre la cubierta, sin solaparse entre sí: x[-0.11, 0.61] la de
+    # recogida y x[0.70, 1.20] la auxiliar, ambas centradas en y=0.
+    invaded = dict(CFG)
+    invaded["table"] = {**CFG["table"], "center": [0.25, 0.0]}
+    invaded["auxiliary_table"] = {**CFG["auxiliary_table"], "center": [0.95, 0.0]}
+    row = round((0.0 - grid.origin[1]) / grid.cell_size)
+    pick_col = round((0.25 - grid.origin[0]) / grid.cell_size)
+    auxiliary_col = round((0.95 - grid.origin[0]) / grid.cell_size)
+    expected = float(CFG["auxiliary_table"]["height"]) - deck_z
+
+    on_belt = stamp("conveyor", invaded)
+    assert on_belt[row, auxiliary_col] == expected, "la auxiliar existe en los nueve niveles"
+    assert on_belt[row, pick_col] == 0.0, "la mesa de recogida no se monta fuera de los 1x"
+
+    on_table = stamp("table", invaded)
+    assert on_table[row, auxiliary_col] == expected
+    assert on_table[row, pick_col] == float(CFG["table"]["height"]) - deck_z
 
 
 def _empty_pallet_map() -> Heightmap:

@@ -271,11 +271,15 @@ Tres avisos:
   episodio el brazo está en la estación y no estorba, pero el problema está ahí y lo que
   toca es excluir los geoms del robot del render de profundidad, no subir `z_max`.
 - **El mapa oráculo tiene que contar la MISMA verdad.** `measure_ground_truth` estampa
-  cualquier mesa que invada la huella del palé. Hoy la de recogida deja 60 mm de aire y
-  la auxiliar común deja 50 mm, pero el estampado sigue siendo obligatorio si se mueve
-  alguna: sin él, el oráculo ofrece una esquina ocupada que las cámaras sí ven. Ya se
-  midió ese fallo con la mesa antigua: el brazo empujaba la caja contra ella, se quedaba
-  a 135 mm del destino y el episodio moría en `ik_unreachable`.
+  **dos mesas nombradas, no cualquiera que invada**: la auxiliar siempre, y la de recogida
+  sólo en los niveles de mesa, que es donde se monta. Una tercera mesa futura no se
+  estamparía sola: hay que añadirla a esa lista (`heightmap._stamp_static_obstacles`).
+  Hoy la de recogida deja 60 mm de aire y la auxiliar común deja 50 mm, así que ninguna
+  pisa una sola celda —lo ancla `tests/test_pallet.py`, sin escena—, pero el estampado
+  sigue siendo obligatorio si se mueve alguna: sin él, el oráculo ofrece una esquina
+  ocupada que las cámaras sí ven. Ya se midió ese fallo con la mesa antigua: el brazo
+  empujaba la caja contra ella, se quedaba a 135 mm del destino y el episodio moría en
+  `ik_unreachable`.
 
 ### Las fuentes
 
@@ -287,9 +291,15 @@ encima de la fuente.
 
 Además de la fuente, **los nueve niveles montan una mesa auxiliar vacía** a la derecha
 del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
-el robot puede apartar uno si una estrategia lo necesita. Cabe el bulto máximo girado,
-su centro está comprobado con IK en las cotas de suelta y aproximación, y deja 50 mm de
-aire hasta el palé para no contaminar su medida.
+el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
+camino del código**; se acepta a propósito como superficie disponible. Deja 50 mm de aire
+hasta el palé para no contaminar su medida.
+
+Lo comprobado de esa mesa es **su centro, no su huella**: cabe ahí el bulto máximo
+girado, y `tests/test_cell.py` deja un bulto reposando en él de verdad. El 28 % de la
+huella queda fuera del alcance del UR10e —la esquina lejana está a 1,576 m contra 1,300
+de alcance—, así que una estrategia que quiera soltar fuera del centro tiene que repetir
+antes el barrido de IK. Las cifras y el barrido están en `configs/scene.yaml`.
 
 Dos avisos:
 
