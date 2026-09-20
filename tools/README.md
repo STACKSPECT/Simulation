@@ -41,6 +41,12 @@ modo. **EJECUCIÓN** llama a `scripts/palletize.py` con la fuente y el nivel de 
 tarjeta y puede publicar telemetría. **DEPURACIÓN** llama al mismo entrypoint con
 `--source`, `--level` y `--no-telemetry`: misma escena, sin subir nada.
 
+Las tarjetas van en tres grupos plegables —mesa, cinta y camión—, y el conmutador de la
+cabecera alterna entre cuadrícula (la de partida: casi todo el catálogo de un vistazo,
+sin la descripción, que es la misma para todo el grupo) y lista. Las dos cosas son
+`<details>` nativo y una clase, y se recuerdan en el `localStorage` del navegador junto
+al tema: no viajan al servidor ni cambian lo que se lanza.
+
 Cada ajuste viaja como bandera al arrancar; el hijo informa por una tubería de ida y no
 escucha. Lo que no tiene bandera sale apagado del panel, con su porqué escrito al lado:
 la barra de reproducción (`--protocol json` no emite `state`, así que no hay grabación),

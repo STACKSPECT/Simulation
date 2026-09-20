@@ -8,6 +8,9 @@ const FRAME_SECONDS = 0.05;
 
 const SPEED_LABELS = { "x0.5": "\u00d70,5", x1: "\u00d71", x2: "\u00d72", x4: "\u00d74", max: "m\u00e1x." };
 
+/* The sources, in the order the panel offers them. Each becomes one foldable group. */
+const GROUPS = [["table", "Mesa"], ["conveyor", "Cinta"], ["truck", "Cami\u00f3n"]];
+
 const $ = (id) => document.getElementById(id);
 
 const ui = {
@@ -19,6 +22,7 @@ const ui = {
   modeNote: $("mode-note"),
   experiments: $("experiments"),
   experimentCount: $("experiment-count"),
+  views: $("views"),
   speeds: $("speeds"),
   fastForward: $("fast-forward"),
   showTrue: $("show-true"),
@@ -48,9 +52,32 @@ let speedValue = 1;
 let mode = "execution";
 let dragging = false;
 
+/* How the operator left the catalogue last time. Thirteen levels do not fit on a laptop
+   at once, so which groups are folded and how wide the cards are is a choice worth
+   keeping -- and a cheap one: neither reaches the server. */
+let view = remembered("view", "grid");
+let openGroups = remembered("groups", {});
+
 const IDLE = { running: false, frames: 0, index: null, paused: false, playback: "stopped", holding: false, activity: "" };
 
 let live = { ...IDLE };
+
+/* -- what the browser remembers ---------------------------------------------------- */
+
+/* Same care as the theme toggle at the bottom: a private window throws on the very
+   first read, and a panel that cannot remember must still open. */
+function remembered(key, fallback) {
+  try {
+    const stored = localStorage.getItem(`panel.${key}`);
+    return stored === null ? fallback : JSON.parse(stored);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function remember(key, value) {
+  try { localStorage.setItem(`panel.${key}`, JSON.stringify(value)); } catch (error) { /* private window */ }
+}
 
 /* -- talking to the server ------------------------------------------------------- */
 
@@ -83,45 +110,69 @@ function command(message) {
 
 /* -- building the page ------------------------------------------------------------ */
 
+/* One <details> per source. Native, so the keyboard and the disclosure state come for
+   free; the only thing worth writing down is which ones the operator folded. */
 function renderExperiments() {
   ui.experimentCount.textContent = `${experiments.length} niveles`;
-  const nodes = [];
-  for (const source of ["table", "conveyor", "truck"]) {
-    const heading = document.createElement("h3");
+  const groups = [];
+  for (const [source, label] of GROUPS) {
+    const items = experiments.filter((entry) => entry.source === source);
+    if (!items.length) continue;
+
+    const group = document.createElement("details");
+    group.className = "group";
+    group.dataset.source = source;
+    group.open = openGroups[source] !== false;
+    group.addEventListener("toggle", () => {
+      openGroups[source] = group.open;
+      remember("groups", openGroups);
+    });
+
+    const heading = document.createElement("summary");
     heading.className = "group-title";
-    heading.textContent = { table: "Mesa", conveyor: "Cinta", truck: "Camión" }[source];
-    nodes.push(heading);
-    for (const item of experiments.filter((entry) => entry.source === source)) {
-      const card = document.createElement("label");
-      card.className = "card";
-      card.dataset.key = item.key;
+    const count = document.createElement("span");
+    count.className = "counter";
+    count.textContent = String(items.length);
+    heading.append(label, count);
 
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "experiment";
-      radio.value = item.key;
-      radio.addEventListener("change", () => selectExperiment(item.key));
+    const body = document.createElement("div");
+    body.className = "group-body";
+    body.append(...items.map(cardFor));
 
-      const title = document.createElement("h3");
-      title.textContent = item.title;
-
-      const text = document.createElement("p");
-      text.textContent = item.description;
-
-      const tags = document.createElement("div");
-      tags.className = "tags";
-      for (const [label, cls] of tagsFor(item)) {
-        const tag = document.createElement("span");
-        tag.className = `tag ${cls}`;
-        tag.textContent = label;
-        tags.append(tag);
-      }
-
-      card.append(radio, title, text, tags);
-      nodes.push(card);
-    }
+    group.append(heading, body);
+    groups.push(group);
   }
-  ui.experiments.replaceChildren(...nodes);
+  ui.experiments.replaceChildren(...groups);
+}
+
+function cardFor(item) {
+  const card = document.createElement("label");
+  card.className = "card";
+  card.dataset.key = item.key;
+
+  const radio = document.createElement("input");
+  radio.type = "radio";
+  radio.name = "experiment";
+  radio.value = item.key;
+  radio.addEventListener("change", () => selectExperiment(item.key));
+
+  const title = document.createElement("h3");
+  title.textContent = item.title;
+
+  const text = document.createElement("p");
+  text.textContent = item.description;
+
+  const tags = document.createElement("div");
+  tags.className = "tags";
+  for (const [label, cls] of tagsFor(item)) {
+    const tag = document.createElement("span");
+    tag.className = `tag ${cls}`;
+    tag.textContent = label;
+    tags.append(tag);
+  }
+
+  card.append(radio, title, text, tags);
+  return card;
 }
 
 function tagsFor(item) {
@@ -270,6 +321,10 @@ function refresh() {
   const recording = busy && live.frames > 0;
 
   ui.main.classList.toggle("busy", busy);
+  ui.experiments.dataset.view = view;
+  for (const button of ui.views.children) {
+    button.classList.toggle("on", button.dataset.view === view);
+  }
   for (const card of ui.experiments.querySelectorAll(".card")) {
     const on = selected && card.dataset.key === selected.key;
     card.classList.toggle("on", Boolean(on));
@@ -383,6 +438,14 @@ for (const button of ui.modes.children) {
   });
 }
 
+for (const button of ui.views.children) {
+  button.addEventListener("click", () => {
+    view = button.dataset.view;
+    remember("view", view);
+    refresh();
+  });
+}
+
 for (const button of ui.transport) {
   button.addEventListener("click", () => {
     switch (button.dataset.act) {
@@ -426,6 +489,9 @@ fetch("/api/experiments")
   .then((data) => {
     experiments = data.experiments;
     renderSpeeds(data.speeds);
+    /* Whatever was folded last time, the level that starts selected has to be visible:
+       a hidden selection with `Ejecutar` live is how you launch the wrong level. */
+    openGroups[experiments[0].source] = true;
     renderExperiments();
     selectExperiment(experiments[0].key);
     connect();

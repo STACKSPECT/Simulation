@@ -175,13 +175,6 @@ main {
 }
 
 .span-experiments { grid-area: experiments; min-height: 0; }
-.group-title {
-  margin: 16px 0 8px;
-  color: var(--text-3);
-  font-size: 12.5px;
-  font-weight: 500;
-}
-.group-title:first-child { margin-top: 0; }
 .mode-switch { grid-template-columns: 1fr 1fr; }
 .mode-switch button { padding-inline: 8px; white-space: nowrap; }
 .span-transport { grid-area: transport; }
@@ -274,7 +267,7 @@ main {
   color: var(--text-4);
 }
 
-/* -- experiment cards ------------------------------------------------------------ */
+/* -- experiment groups ------------------------------------------------------------ */
 
 .cards {
   display: flex;
@@ -284,6 +277,54 @@ main {
   margin: -3px;
   padding: 3px;
 }
+
+/* Thirteen levels in three sources: <details> so folding one is native, keyboard
+   included, and the page has no open/closed state of its own to get wrong. */
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.group-title::-webkit-details-marker { display: none; }
+.group-title:hover { color: var(--text); }
+
+.group-title::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform .15s ease;
+}
+
+.group[open] > .group-title::before { transform: rotate(45deg); }
+
+.group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0 4px;
+}
+
+/* Cuadrícula: el catálogo entero de un vistazo. `auto-fill` resuelve solo el ancho
+   estrecho, así que no hace falta otra media query. */
+.cards[data-view="grid"] .group-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  align-items: start;
+}
+
+/* La descripción sale de `descriptions[source]`: es la misma cadena para los siete
+   niveles de mesa, y la cabecera del grupo ya la dice. */
+.cards[data-view="grid"] .card p { display: none; }
 
 .card {
   position: relative;
@@ -369,6 +410,22 @@ main.busy .card.on { opacity: 1; }
 }
 
 .segmented button:disabled { cursor: not-allowed; opacity: .45; }
+
+/* The counter and the view switch share the right half of a panel head. After
+   `.segmented button`, which sets a padding of its own with the same specificity. */
+.head-tools { display: flex; align-items: center; gap: 12px; }
+
+.view-switch button { padding: 5px 10px; }
+
+.view-switch svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linejoin: round;
+}
 
 /* -- switches --------------------------------------------------------------------- */
 

@@ -32,6 +32,8 @@
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5h3v14H8zM13 5h3v14h-3z"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></symbol>
 </svg>
 
 <header class="top">
@@ -58,7 +60,13 @@
   <section class="panel span-experiments">
     <header class="panel-head">
       <h2>Experimento</h2>
-      <span class="counter" id="experiment-count"></span>
+      <div class="head-tools">
+        <span class="counter" id="experiment-count"></span>
+        <div class="segmented view-switch" id="views">
+          <button type="button" data-view="grid" title="Cuadrícula" aria-label="Cuadrícula"><svg><use href="#i-grid"/></svg></button>
+          <button type="button" data-view="list" title="Lista" aria-label="Lista"><svg><use href="#i-list"/></svg></button>
+        </div>
+      </div>
     </header>
     <div class="cards" id="experiments"></div>
   </section>
