@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import mujoco
 import numpy as np
@@ -408,6 +409,23 @@ def test_the_cell_always_takes_the_carton_with_nothing_on_top_of_it() -> None:
         assert taken == [slot.package_id for slot in unload_order(simulator.truck_slots)]
     finally:
         simulator.close()
+
+
+def test_pick_forecast_respects_what_each_source_can_see() -> None:
+    """The conveyor reveals no future cartons; the trailer reveals its remaining load."""
+    remaining = [1, 2, 3]
+    conveyor = SimpleNamespace(truck=None)
+    conveyor_incoming = [0, *PalletizingSimulator._pick_forecast(conveyor, remaining)]
+
+    tops = {1: 0.20, 2: 0.40, 3: 0.30}
+    truck = SimpleNamespace(
+        truck=object(),
+        _package_top_center=lambda index: np.array([0.0, 0.0, tops[index]]),
+    )
+    truck_incoming = [0, *PalletizingSimulator._pick_forecast(truck, remaining)]
+
+    assert conveyor_incoming == [0]
+    assert truck_incoming == [0, 2, 3, 1]
 
 
 def test_the_arm_reaches_every_carton_of_a_random_trailer_load() -> None:

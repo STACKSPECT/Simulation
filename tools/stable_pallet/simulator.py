@@ -1575,7 +1575,7 @@ class PalletizingSimulator:
         is recomputed on every cycle.
         """
         if self.truck is None:
-            return list(remaining)
+            return []
         return sorted(
             remaining, key=lambda index: (-float(self._package_top_center(index)[2]), index)
         )
