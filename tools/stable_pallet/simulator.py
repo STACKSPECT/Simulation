@@ -35,6 +35,11 @@ from .suction import SuctionArray
 from .truck import TruckSlot, load_summary, plan_truck_load, unload_order
 from .visual_assets import UR10E_MESH_FILES, load_ur10e_mesh_assets
 
+# The package stays legible while its centre-of-mass marker remains visible through it.
+# The live viewer model uses this alpha; playback, package staging and physics-side
+# decisions keep the original appearance separately.
+COM_PACKAGE_ALPHA = 0.25
+
 
 @dataclass(frozen=True, slots=True)
 class HeldPackage:
@@ -800,6 +805,8 @@ class PalletizingSimulator:
         self.scenario = scenario
         self.simplified_graphics = simplified_graphics
         self.controls = controls if controls is not None else ViewerControls()
+        self._com_package_original_alpha: dict[str, float] = {}
+        self._com_package_rendered_alpha: dict[str, float] = {}
         self.mesh_assets = None if simplified_graphics else load_ur10e_mesh_assets()
         model = mujoco.MjModel.from_xml_string(
             build_mjcf(scenario, simplified_graphics=simplified_graphics), assets=self.mesh_assets
@@ -927,7 +934,7 @@ class PalletizingSimulator:
             name: (
                 int(self.model.geom_contype[geom]),
                 int(self.model.geom_conaffinity[geom]),
-                self.model.geom_rgba[geom].copy(),
+                self._semantic_geom_rgba(name, geom),
             )
             for name, geom in ((name, self._geom_id(name)) for name in self._appearance_geom_names())
             if geom >= 0
@@ -953,6 +960,8 @@ class PalletizingSimulator:
             self.model.geom_rgba[geom] = rgba
         mujoco.mj_forward(self.model, self.data)
         self.held_package = held
+        if self.viewer is not None:
+            self._update_com_package_translucency()
         if self.renderer is not None:
             self.renderer.close()
             self.renderer = mujoco.Renderer(self.model, height=720, width=1280)
@@ -1006,12 +1015,8 @@ class PalletizingSimulator:
             self._pacing_suspended = previous
             self._capture_frame(force=True)
 
-    def _appearance_geom_names(self) -> list[str]:
-        """Geoms the cell recolours as it runs, so a rebuild has to carry their state over.
-
-        Recompiling resets every geom to what the XML declares, which would hide the
-        packages -- they are spawned transparent -- and forget which cups are pulling.
-        """
+    def _package_visual_geom_names(self) -> list[str]:
+        """Every visible part of a package, excluding collision-only geometry."""
         names = [f"package_geom_{index}" for index in range(len(self.scenario.packages))]
         if not self.simplified_graphics:
             names += [
@@ -1019,6 +1024,68 @@ class PalletizingSimulator:
                 for index in range(len(self.scenario.packages))
                 for part in ("tape", "label", "code")
             ]
+        return names
+
+    def _update_com_package_translucency(self) -> None:
+        """Apply or remove CoM translucency without losing the packages' real alpha.
+
+        Alpha also records whether a package has been staged, and playback saves it in
+        every frame. The two dictionaries retain that semantic value separately from the
+        translucent value left on the live model for the viewer's render thread.
+        """
+        names = self._package_visual_geom_names()
+        if not self.controls.draws_markers:
+            for name in names:
+                geom = self._geom_id(name)
+                if geom < 0 or name not in self._com_package_rendered_alpha:
+                    continue
+                current = float(self.model.geom_rgba[geom, 3])
+                rendered = self._com_package_rendered_alpha[name]
+                # An animation may have made a hidden package visible since the last
+                # viewer frame. In that case its new alpha is already the right one.
+                if np.isclose(current, rendered):
+                    self.model.geom_rgba[geom, 3] = self._com_package_original_alpha[name]
+            self._com_package_original_alpha.clear()
+            self._com_package_rendered_alpha.clear()
+            return
+
+        for name in names:
+            geom = self._geom_id(name)
+            if geom < 0:
+                continue
+            current = float(self.model.geom_rgba[geom, 3])
+            rendered = self._com_package_rendered_alpha.get(name)
+            if rendered is None or not np.isclose(current, rendered):
+                self._com_package_original_alpha[name] = current
+            original = self._com_package_original_alpha[name]
+            translucent = min(original, COM_PACKAGE_ALPHA)
+            self.model.geom_rgba[geom, 3] = translucent
+            self._com_package_rendered_alpha[name] = translucent
+
+    def _semantic_geom_rgba(self, name: str, geom: int) -> np.ndarray:
+        """Return appearance state with viewer-only CoM translucency removed."""
+        rgba = self.model.geom_rgba[geom].copy()
+        rendered = self._com_package_rendered_alpha.get(name)
+        if rendered is not None and np.isclose(float(rgba[3]), rendered):
+            rgba[3] = self._com_package_original_alpha[name]
+        return rgba
+
+    def _semantic_model_rgba(self) -> np.ndarray:
+        """Copy all geom colours without viewer-only CoM translucency."""
+        rgba = self.model.geom_rgba.copy()
+        for name in self._package_visual_geom_names():
+            geom = self._geom_id(name)
+            if geom >= 0:
+                rgba[geom] = self._semantic_geom_rgba(name, geom)
+        return rgba
+
+    def _appearance_geom_names(self) -> list[str]:
+        """Geoms the cell recolours as it runs, so a rebuild has to carry their state over.
+
+        Recompiling resets every geom to what the XML declares, which would hide the
+        packages -- they are spawned transparent -- and forget which cups are pulling.
+        """
+        names = self._package_visual_geom_names()
         names += [f"cup_{column}_{row}" for column, row, _x, _y in SuctionArray().cup_offsets()]
         return names
 
@@ -1054,6 +1121,7 @@ class PalletizingSimulator:
         """Push the current state to the viewer window, markers included."""
         if self.viewer is None:
             return
+        self._update_com_package_translucency()
         if self.com_markers is not None:
             self.com_markers.draw()
         self.viewer.sync()
@@ -1598,7 +1666,9 @@ class PalletizingSimulator:
         return [
             index
             for index in range(len(self.scenario.packages))
-            if self.model.geom_rgba[self._package_geom(index)][3] > 0.5
+            if self._semantic_geom_rgba(
+                f"package_geom_{index}", self._package_geom(index)
+            )[3] > 0.5
         ]
 
     def _package_relative_to_pallet(self, index: int) -> tuple[np.ndarray, np.ndarray]:

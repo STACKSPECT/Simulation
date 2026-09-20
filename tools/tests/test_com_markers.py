@@ -7,7 +7,7 @@ import pytest
 from stable_pallet.com_markers import ComMarkers
 from stable_pallet.pallet_com import com_from_world_points
 from stable_pallet.scenario import load_scenario
-from stable_pallet.simulator import PalletizingSimulator
+from stable_pallet.simulator import COM_PACKAGE_ALPHA, PalletizingSimulator
 
 
 class _StubViewer:
@@ -21,6 +21,18 @@ class _StubViewer:
 
     def close(self) -> None:
         pass
+
+
+class _AppearanceViewer(_StubViewer):
+    """Records package alpha values when the viewer copies the model."""
+
+    def __init__(self, model) -> None:
+        super().__init__(model)
+        self.model = model
+        self.synced_alpha: list[np.ndarray] = []
+
+    def sync(self) -> None:
+        self.synced_alpha.append(self.model.geom_rgba[:, 3].copy())
 
 
 def _cell(*, measure_com: bool = True) -> PalletizingSimulator:
@@ -63,6 +75,36 @@ def test_each_staged_package_gets_a_marker_plus_one_for_the_whole_load() -> None
         simulator.com_markers.draw()
         # No placement has been planned yet, so there is no load estimate to draw.
         assert simulator.viewer.user_scn.ngeom == 3 + 3 + 3
+    finally:
+        simulator.close()
+
+
+def test_packages_are_translucent_only_while_com_markers_are_visible() -> None:
+    simulator = _cell()
+    try:
+        _stage(simulator, (0,))
+        viewer = _AppearanceViewer(simulator.model)
+        simulator.viewer = viewer
+        simulator.com_markers = ComMarkers(simulator)
+        package_ids = [simulator._package_geom(index) for index in range(3)]
+        original_alpha = simulator.model.geom_rgba[package_ids, 3].copy()
+
+        simulator.controls.show_true_com = True
+        simulator.sync_viewer()
+
+        assert viewer.synced_alpha[-1][package_ids[0]] == pytest.approx(COM_PACKAGE_ALPHA)
+        assert viewer.synced_alpha[-1][package_ids[1:]] == pytest.approx([0.0, 0.0])
+        assert simulator.model.geom_rgba[package_ids, 3] == pytest.approx(
+            viewer.synced_alpha[-1][package_ids]
+        )
+        assert simulator._semantic_model_rgba()[package_ids, 3] == pytest.approx(original_alpha)
+        assert simulator._placed_package_indices() == [0]
+
+        simulator.controls.show_true_com = False
+        simulator.sync_viewer()
+
+        assert viewer.synced_alpha[-1][package_ids] == pytest.approx(original_alpha)
+        assert simulator.model.geom_rgba[package_ids, 3] == pytest.approx(original_alpha)
     finally:
         simulator.close()
 
