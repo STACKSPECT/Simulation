@@ -116,6 +116,8 @@
           <small>Los que usa el robot. La línea amarilla es el error.</small>
         </span>
       </label>
+      <p class="hint" id="com-note" hidden>Apagados: el experimento elegido no corre
+      <code>scripts/palletize.py</code> y su entrypoint no tiene <code>--show-com</code>.</p>
     </section>
 
     <section class="panel">
@@ -131,6 +133,9 @@
       casilla del issue #25: sus banderas no hacen hoy lo que prometen, así que cablearla
       sería peor que dejarla quieta. <b>Dejar el visor abierto</b> no tiene bandera en
       <code>scripts/palletize.py</code>.</p>
+      <p class="hint" id="startup-note" hidden><b>Ensayo de estabilidad</b> también queda
+      apagado con este experimento: <code>scripts/orient_by_com.py</code> no lo tiene, y
+      cuatro cubos en huecos fijos no son la pila que el ensayo sacude.</p>
       <div class="seed">
         <label for="seed">Semilla</label>
         <input type="number" id="seed" placeholder="la del experimento">

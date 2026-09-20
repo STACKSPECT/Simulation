@@ -366,17 +366,23 @@ class ArmController:
         self._carry_held()
         scene.step(0.06)
 
-    def move_to(self, pose: Pose, *, approach: bool = False) -> bool:
+    def move_to(self, pose: Pose, *, approach: bool = False,
+                compensate_held: bool = True) -> bool:
         """Lleva el TCP a `pose`. `False` = no llega, y eso es `ik_unreachable`.
 
         Tres pasadas de corrección: se resuelve, se va, se mide el error que queda en
         cartesiano y se vuelve a pedir compensándolo. Es lo que quita la caída
         estacionaria del servo bajo carga sin tener que modelarla.
+
+        ``compensate_held=False`` reserva una salida estrecha para maniobras que ya han
+        calculado la pose EXACTA del TCP a partir de la transformada del paquete. El
+        paletizado normal pide el centro del cartón y conserva la compensación; el
+        experimento de orientación pide el TCP porque gira la herramienta 90 grados.
         """
         scene = self.scene
         desired = np.asarray(pose.position, dtype=float)
         commanded = desired.copy()
-        offset = self._held_offset_world(pose)
+        offset = self._held_offset_world(pose) if compensate_held else np.zeros(3)
         desired_tool = desired - offset
         commanded = desired_tool.copy()
 

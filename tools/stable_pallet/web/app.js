@@ -8,8 +8,16 @@ const FRAME_SECONDS = 0.05;
 
 const SPEED_LABELS = { "x0.5": "\u00d70,5", x1: "\u00d71", x2: "\u00d72", x4: "\u00d74", max: "m\u00e1x." };
 
-/* The sources, in the order the panel offers them. Each becomes one foldable group. */
-const GROUPS = [["table", "Mesa"], ["conveyor", "Cinta"], ["truck", "Cami\u00f3n"]];
+/* The sources, in the order the panel offers them. Each becomes one foldable group.
+   `experiment` no es una fuente de la celda: es el cajón de lo que NO es uno de los
+   catorce niveles comparables, y va el último a propósito para que no se lea como uno
+   más de la lista. */
+const GROUPS = [
+  ["table", "Mesa"],
+  ["conveyor", "Cinta"],
+  ["truck", "Cami\u00f3n"],
+  ["experiment", "Experimentos"],
+];
 
 const $ = (id) => document.getElementById(id);
 
@@ -31,6 +39,8 @@ const ui = {
   measureCom: $("measure-com"),
   simplified: $("simplified"),
   stabilityTest: $("stability-test"),
+  comNote: $("com-note"),
+  startupNote: $("startup-note"),
   hold: $("hold"),
   seed: $("seed"),
   run: $("run"),
@@ -113,7 +123,11 @@ function command(message) {
 /* One <details> per source. Native, so the keyboard and the disclosure state come for
    free; the only thing worth writing down is which ones the operator folded. */
 function renderExperiments() {
-  ui.experimentCount.textContent = `${experiments.length} niveles`;
+  const levels = experiments.filter((entry) => entry.kind === "level").length;
+  const extra = experiments.length - levels;
+  ui.experimentCount.textContent = extra
+    ? `${levels} niveles \u00b7 ${extra} experimento${extra === 1 ? "" : "s"}`
+    : `${levels} niveles`;
   const groups = [];
   for (const [source, label] of GROUPS) {
     const items = experiments.filter((entry) => entry.source === source);
@@ -182,6 +196,8 @@ function tagsFor(item) {
   if (item.source === "table") tags.push(["mesa", ""]);
   if (item.source === "conveyor") tags.push(["cinta", ""]);
   if (item.source === "truck") tags.push(["cami\u00f3n", "tag-truck"]);
+  if (item.source === "experiment") tags.push(["experimento", "tag-experiment"]);
+  if (item.telemetry === false) tags.push(["sin telemetr\u00eda", "tag-no-upload"]);
   if (item.instantPlace) tags.push(["colocado instant\u00e1neo", ""]);
   if (item.shake) tags.push(["sacudidas", "tag-shake"]);
   if (item.kind === "plan") tags.push(["sin f\u00edsica", ""]);
@@ -209,6 +225,10 @@ function renderSpeeds(presets) {
 
 function selectExperiment(key) {
   selected = experiments.find((item) => item.key === key) || experiments[0];
+  /* Una tarjeta sin telemetría no tiene EJECUCIÓN que ofrecer y el servidor la rechaza.
+     La página se mueve sola al modo que sí existe en vez de dejar armado un botón que
+     sólo puede acabar en un 400 al pulsar Ejecutar. */
+  if (selected && selected.telemetry === false) mode = "debug";
   refresh();
 }
 
@@ -334,26 +354,38 @@ function refresh() {
   for (const button of ui.speeds.children) {
     button.classList.toggle("on", button.dataset.name === speedName);
   }
+  /* Lo que la tarjeta elegida SABE hacer. Una carga sin telemetría no tiene EJECUCIÓN,
+     y una sin `--show-com` o sin `--stability-test` no tiene esos controles: se apagan
+     y la página escribe al lado por qué, que es la regla de AGENTS.md §9.9. */
+  const noUpload = Boolean(selected) && selected.telemetry === false;
+  const comMarkers = !selected || selected.comMarkers !== false;
+  const stability = !selected || selected.stabilityTest !== false;
+
   for (const button of ui.modes.children) {
     button.classList.toggle("on", button.dataset.mode === mode);
-    button.disabled = busy;
+    button.disabled = busy || (noUpload && button.dataset.mode === "execution");
   }
   ui.modeBadge.textContent = mode === "execution" ? "EJECUCIÓN" : "DEPURACIÓN · SIN TELEMETRÍA";
   ui.modeBadge.dataset.mode = mode;
-  ui.modeNote.textContent = mode === "execution"
-    ? "Lanza scripts/palletize.py y publica telemetría si hay credenciales."
-    : "Lanza scripts/palletize.py con el nivel elegido y --no-telemetry. Misma escena que EJECUCIÓN, sin subir nada.";
+  ui.modeNote.textContent = noUpload
+    ? "Este experimento no abre episodio ni conoce la plataforma: EJECUCIÓN queda apagada porque no tendría qué publicar."
+    : mode === "execution"
+      ? "Lanza scripts/palletize.py y publica telemetría si hay credenciales."
+      : "Lanza scripts/palletize.py con el nivel elegido y --no-telemetry. Misma escena que EJECUCIÓN, sin subir nada.";
 
   ui.viewer.disabled = busy || !selected?.watchable;
   ui.simplified.disabled = busy;
-  ui.stabilityTest.disabled = busy;
+  ui.stabilityTest.disabled = busy || !stability;
+  if (!stability) ui.stabilityTest.checked = false;
+  ui.startupNote.hidden = stability;
+  ui.comNote.hidden = comMarkers;
   ui.seed.disabled = busy;
   /* Cada bandera se lee una vez, al arrancar: el hijo informa por una tubería de ida y
      no escucha. Por eso los interruptores de CoM se bloquean mientras corre, en vez de
      fingir que cambian algo. `measure-com` y `hold` se quedan apagados en el HTML: no
      hay bandera que mandarles, y el panel lo explica al lado. */
-  ui.showTrue.disabled = busy;
-  ui.showEstimated.disabled = busy;
+  ui.showTrue.disabled = busy || !comMarkers;
+  ui.showEstimated.disabled = busy || !comMarkers;
   if (selected && !selected.watchable) ui.viewer.checked = false;
 
   ui.run.disabled = busy;

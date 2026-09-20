@@ -21,6 +21,10 @@ from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import build_catalogue, build_scene, levels, load_configs  # noqa: E402
 from src.cell.stability import run_stability_test  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
+from src.com_orientation import (  # noqa: E402
+    build_orientation_scene,
+    run_orientation_experiment,
+)
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
@@ -444,6 +448,34 @@ def test_robot_can_leave_a_package_on_the_auxiliary_table() -> None:
     finally:
         if arm.held is not None:
             arm.release()
+        scene.close()
+
+
+def test_robot_orients_four_cubes_with_their_cog_towards_the_support() -> None:
+    """Ciclo entero: pesar, tumbar, volver a coger y depositar en el palé."""
+    scene = build_orientation_scene(seed=1, simplified=True)
+    try:
+        result = run_orientation_experiment(
+            scene, OracleDetector(), WristGauge(), speed=1.0
+        )
+        assert len(result.records) == len(scene.boxes) == 4
+        assert [row.support_face.label for row in result.records] == [
+            "+X", "-X", "+Y", "-Y",
+        ]
+        slots = scene.cfg["com_orientation_experiment"]["pallet_slots_xy"]
+        for box, row, slot in zip(scene.boxes, result.records, slots):
+            position, quaternion = scene.box_pose(box.index)
+            rotation = np.empty(9)
+            scene.mujoco.mju_quat2Mat(rotation, quaternion)
+            rotation = rotation.reshape(3, 3)
+            true_cog_world = rotation @ np.asarray(box.cog_offset_m)
+            support_world = rotation @ row.support_face.normal
+            assert true_cog_world[2] < -0.040
+            assert row.downward_cog_m > 0.035
+            assert support_world @ np.array([0.0, 0.0, -1.0]) > math.cos(math.radians(3))
+            assert np.linalg.norm(position[:2] - np.asarray(slot)) < 0.01
+            assert abs(position[2] - box.dims_m[2] / 2 - scene.deck_z) < 0.006
+    finally:
         scene.close()
 
 

@@ -34,6 +34,11 @@ from src.cell.scene import (  # noqa: E402
     lighting_for,
     load_configs,
 )
+from src.com_orientation import (  # noqa: E402
+    build_orientation_boxes,
+    nearest_lateral_face,
+    support_rotation,
+)
 from src.contracts import Heightmap, PackageSpec, PlacementPlan  # noqa: E402
 from src.episode import Episode  # noqa: E402
 from src.planner.heightmap import _stamp_static_obstacles  # noqa: E402
@@ -106,6 +111,26 @@ def test_level_ids_encode_the_source() -> None:
     for level in catalogue.values():
         assert level.id // 10 == SOURCE_DECADE[level.source]
         assert level.decor in DECORS
+
+
+def test_com_orientation_is_separate_and_puts_the_nearest_face_down() -> None:
+    """El experimento no es un nivel y su geometría sale sólo del CoM medido."""
+    assert all("com_" not in level.types for level in levels(CFG).values())
+    boxes = build_orientation_boxes(CFG)
+    assert len(boxes) == len(CFG["com_orientation_experiment"]["pallet_slots_xy"]) == 4
+    assert all(len(set(box.dims_m)) == 1 for box in boxes)
+    expected = ["+X", "-X", "+Y", "-Y"]
+    for box, label in zip(boxes, expected):
+        spec = PackageSpec(
+            box.package_id, box.type_name, box.dims_m, box.mass_kg,
+            np.asarray(box.cog_offset_m),
+        )
+        face = nearest_lateral_face(spec)
+        rotation = support_rotation(face)
+        assert face.label == label
+        assert np.allclose(rotation @ face.normal, [0.0, 0.0, -1.0])
+        assert np.allclose(rotation @ [0.0, 0.0, 1.0], [0.0, -1.0, 0.0])
+        assert abs(np.linalg.det(rotation) - 1.0) < 1e-9
 
 
 def test_the_plant_only_lends_its_scenery() -> None:

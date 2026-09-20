@@ -20,7 +20,7 @@ el benchmark y el panel de control.
 | `shake.py` | 15 sacudidas de transporte (0,05–0,80 g en X, Y, Z) y ensayo de viga estrecha |
 | `benchmark.py` | Comparación determinista contra un *first-fit* |
 | `generator.py` | Sobre de cartón: 18-55 × 16-40 × 8-30 cm, 90-280 kg/m³, masa = densidad × volumen |
-| `webapp.py`, `runner.py`, `playback.py` | Panel: ambos modos lanzan `palletize.py`; depuración con `--no-telemetry` |
+| `webapp.py`, `runner.py`, `playback.py` | Panel: los niveles lanzan `palletize.py` —depuración con `--no-telemetry`— y el experimento de CoM, `orient_by_com.py` |
 | `simulator.py` | La celda original, de la que se troceó `src/cell/` |
 
 ## Cómo se usa
@@ -36,12 +36,20 @@ uv run stable-pallet benchmark --trials 20                         # contra firs
 uv run pytest                                                      # 200 comprobaciones
 ```
 
-El panel muestra catorce tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
-modo. **EJECUCIÓN** llama a `scripts/palletize.py` con la fuente y el nivel de la
-tarjeta y puede publicar telemetría. **DEPURACIÓN** llama al mismo entrypoint con
+El panel muestra catorce tarjetas de nivel, tomadas de `configs/pallet.yaml`, y un
+selector de modo. **EJECUCIÓN** llama a `scripts/palletize.py` con la fuente y el nivel
+de la tarjeta y puede publicar telemetría. **DEPURACIÓN** llama al mismo entrypoint con
 `--source`, `--level` y `--no-telemetry`: misma escena, sin subir nada.
 
-Las tarjetas van en tres grupos plegables —mesa, cinta y camión—, y el conmutador de la
+Una tarjeta más, en el grupo **Experimentos**, lanza `scripts/orient_by_com.py`: no es
+uno de los catorce niveles comparables y no está en `levels`, que es justo lo que lo
+mantiene fuera de esa comparación. Ese script no abre episodio, así que la tarjeta va
+marcada sin telemetría: el modo cae solo a DEPURACIÓN, EJECUCIÓN queda apagada y el
+servidor la rechaza con un 400 si alguien llama a `/api/run` a mano. Las casillas que
+ese entrypoint no declara —`--show-com`, `--stability-test`— se apagan con ella
+elegida, porque mandárselas sería un `SystemExit` de argparse antes de la primera pose.
+
+Las tarjetas van en cuatro grupos plegables —mesa, cinta, camión y experimentos—, y el conmutador de la
 cabecera alterna entre cuadrícula (la de partida: casi todo el catálogo de un vistazo,
 sin la descripción, que es la misma para todo el grupo) y lista. Las dos cosas son
 `<details>` nativo y una clase, y se recuerdan en el `localStorage` del navegador junto

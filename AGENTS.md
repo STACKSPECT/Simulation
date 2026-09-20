@@ -117,10 +117,11 @@ python scripts/palletize.py --no-oracle-heightmap   # el mapa, con camaras
 python scripts/palletize.py --beam-planner      # el beam search, para comparar
 python scripts/palletize.py --naive-planner     # la linea base en rejilla
 python scripts/palletize.py --stability-test    # al final: 15 sacudidas y viga X/Y
+python scripts/orient_by_com.py --viewer         # experimento separado: cara próxima al CoM abajo
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
 python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
-cd tools && uv run pytest                       # el demostrador sobrevive a la mudanza
+cd tools && uv run --extra dev pytest           # el demostrador sobrevive a la mudanza
 ```
 
 El SDK `theker_telemetry` **no vive aquí**: es el contrato de lo que la plataforma
@@ -422,6 +423,61 @@ mejora no significa nada:
 reimplementan: una tercera copia acabaría discrepando con la que usa la interfaz, que es
 el indicador que la define entera.
 
+### El experimento separado de orientación por CoM
+
+`scripts/orient_by_com.py` NO es el nivel 18 ni otro modo oculto de `palletize.py`. Es un
+experimento local, sin telemetría y fuera de `levels`, para que no altere las catorce
+cargas comparables. Su director vive en `src/com_orientation.py` y la carga en
+`configs/pallet.yaml: com_orientation_experiment`.
+
+**El panel sí lo ofrece, y por eso hace falta decir cómo.** Estar fuera de `levels` es lo
+que protege la comparación; esconderlo del selector sólo lo hacía difícil de correr. La
+tarjeta va en un grupo propio —`Experimentos`, el último—, nunca entre las de mesa, y
+`_catalogue` la marca con tres capacidades que la página lee para apagar controles:
+
+| capacidad | hoy | qué apaga |
+|---|---|---|
+| `telemetry` | `false` | EJECUCIÓN. Ese modo promete subir si hay credenciales y aquí no hay nada que subir |
+| `comMarkers` | `false` | los dos interruptores de centro de masa: el script no tiene `--show-com` |
+| `stabilityTest` | `false` | el ensayo: no tiene `--stability-test`, y cuatro cubos en huecos fijos no son una pila |
+
+Las tres se hacen cumplir **en el servidor**, en `_run_request`, no sólo en la página: la
+puerta HTTP se puede llamar a mano. EJECUCIÓN se RECHAZA con un 400 en vez de degradarse
+a DEPURACIÓN en silencio —tragársela dejaría al operador mirando la interfaz esperando un
+episodio que nadie abrió—, y las casillas que el script no sabe leer se filtran contra la
+capacidad de la tarjeta, no contra lo que marcó la página. **Una bandera que el script no
+declara no es un aviso: es un `SystemExit` de argparse** antes de la primera pose, con el
+panel enseñando un error donde debería haber un experimento. Lo ancla
+`test_every_flag_the_panel_sends_is_one_the_script_declares`, que lee el fuente del script
+en vez de importarlo para no arrastrar MuJoCo a esa suite. Si algún día gana `--show-com`
+o `--stability-test`, lo que toca es encender su capacidad en `_catalogue`, no dejar el
+control apagado.
+
+Y para que el panel pueda leerlo, el script habla el mismo protocolo que el paletizado:
+`--protocol json` emite `log` y un `finished` final. En texto no cambia nada.
+
+El ciclo tiene dos agarres por cubo: la mesa de fuente entrega uno, el VGP20 lo recoge,
+`WristGauge` calcula su CoM, el brazo lo tumba en el centro de la mesa auxiliar con la
+cara lateral más próxima al CoM hacia abajo, corta el vacío, se retira horizontalmente,
+lo vuelve a coger por arriba y lo deposita en un hueco fijo de la primera capa del palé.
+La pose que se usa para tumbar sale de la transformada medida entre paquete y TCP; no se
+teletransporta el paquete ni se cambia su cuaternión a mano.
+
+La palabra **lateral** es importante. Una lectura de muñeca a plomo observa X/Y y ancla Z
+al centro geométrico, así que decidir entre tapa y fondo sería usar un dato que no se ha
+medido. Los cuatro cubos sesgan el CoM hacia `+X`, `-X`, `+Y` y `-Y`. Miden 300 mm de
+arista porque, tumbado el agarre, el lado de 264 mm del VGP20 queda vertical y conserva
+18 mm de aire hasta la mesa por cada lado; con un cubo de 260 mm la herramienta
+intersectaría la auxiliar. La tapa original mira a `-Y`: es la única de las cuatro
+direcciones laterales cuyo waypoint bajo se sostuvo con movimiento interpolado; a `-X`
+el brazo superior rozaba el pedestal y se quedaba 65 mm alto. El detector sigue siendo
+oráculo porque la percepción no es lo que se ensaya; el CoM siempre sale del gauge real.
+
+`ArmController.move_to(..., compensate_held=False)` existe sólo para esta maniobra: el
+director ya ha resuelto la pose exacta del TCP a partir de la transformada rígida. El
+paletizado normal pide el centro del cartón y conserva la compensación de carga por
+defecto.
+
 ### La heurística
 
 Mide la altura de todo el palé, y con las dimensiones del paquete que tiene en la mano
@@ -609,7 +665,8 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
    fuera de tolerancia y el margen contra el polígono de soporte.
 3. **La celda:** `python tests/test_cell.py`. Compila las tres fuentes, comprueba las
    cámaras, la banda, el orden del camión, la envolvente de IK, el pesaje de muñeca y
-   que el ensayo físico deja la misma pila que encontró.
+   que el ensayo físico deja la misma pila que encontró. También recorre los cuatro
+   cubos del experimento de orientación: dos agarres, auxiliar y cara del CoM hacia abajo.
 4. **Con visor:** `python scripts/palletize.py --viewer --source table`.
 5. **Sin Supabase:** `python scripts/palletize.py -n 1 --no-telemetry --level 21`. Un episodio
    entero a disco; mira el `episodes.jsonl`.
@@ -618,7 +675,9 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 7. **Con `/` abierto en el navegador.** Es la prueba de verdad: el episodio aparece **en
    curso** a los pocos segundos, el palé se monta paquete a paquete, los KPIs se mueven
    solos y al acabar pasa a terminado con su éxito o su causa de fallo.
-8. **El demostrador:** `cd tools && uv run pytest`.
+8. **El demostrador:** `cd tools && uv run --extra dev pytest`. El `--extra dev` es
+   obligatorio en un checkout limpio: ahí vive pytest; sin él `uv run` puede acabar
+   invocando uno del sistema contra un entorno que no contiene ni el paquete ni MuJoCo.
 9. **El panel:** un nivel de mesa, cinta y camión en EJECUCIÓN y DEPURACIÓN; el modo
    debe estar visible y DEPURACIÓN debe avisar que no publica. Cambiar de nivel tiene
    que cambiar la carga (catálogo, número, ruido, CoG), no solo el título de la
@@ -627,6 +686,10 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
    desactiva y se escribe al lado por qué. Un control inerte cuesta más de depurar que
    uno que no está. **Ensayo de estabilidad al terminar** sí tiene bandera y va
    encendida: repite un nivel con ella y deben aparecer las 15 sacudidas y la viga X/Y.
+   Y la tarjeta del grupo **Experimentos**: al elegirla el modo tiene que caerse solo a
+   DEPURACIÓN con EJECUCIÓN apagada, los dos interruptores de CoM y el ensayo apagados
+   con su aviso al lado, y el registro tiene que llenarse con una línea por cubo y
+   cerrar con el resumen. Vuelve a elegir un nivel y los tres controles reviven.
 10. **Contra la base**, después:
 
 ```sql
