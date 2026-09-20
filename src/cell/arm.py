@@ -31,8 +31,12 @@ moverse el brazo? Los números y su porqué, en `configs/pallet.yaml`.
 
 **Todo el trayecto va en cartesiano a una cota de tránsito fija**: subir recto, cruzar,
 bajar recto. El rodeo por `home` en espacio de juntas tira la caja al ir y barre el
-montón al volver. `move_joints` existe sólo para la foto final, cuando ya no queda nada
-que colocar.
+montón al volver, y por eso `park()` —el apartado para la foto de cada capa— sigue
+yendo por `go_to`, en cartesiano. `move_joints` es el INTERPOLADOR que recorre cada
+waypoint cartesiano, no una maniobra alternativa: `move_to` lo llama con
+`settle=False` y deja que `_track_pose` decida cuándo enlazar el siguiente. Quien lo
+llama por su cuenta, y con el `settle=True` por defecto, es sólo lo que necesita
+reposo físico de verdad: el pesaje (`vision/gauge.py`) y `go_home()`.
 
 **El bloque de ventosas que agarra una caja estrecha está DESCENTRADO respecto al
 cuerpo**, y el brazo tiene que cancelar ese desplazamiento en cada movimiento mientras
@@ -391,11 +395,16 @@ class ArmController:
                     ))
                     return True
             error = desired_tool - scene.data.site_xpos[scene.tcp_site]
-            tolerance = (
-                float(self.motion["approach_tolerance"])
-                if approach else self.reach_tolerance
-            )
-            if self.fast_forward and np.linalg.norm(error) <= tolerance:
+            # Los dos caminos aceptan con umbrales DISTINTOS a propósito. En física
+            # completa manda `_track_pose` con `approach_tolerance`: ahí hay un servo que
+            # frenar y el enlace de waypoints necesita ese margen —bajarlo a 2,5 mm tira
+            # L31 s1 y L31 s3 a `stack_collapse` con 0 cajas—. El fast-forward
+            # TELETRANSPORTA: no hay reposo que quitar ni waypoints que enlazar, así que
+            # no recibe ninguno de los beneficios del cambio y aflojarlo sólo cuesta
+            # precisión. Medido sobre la rejilla de 20 celdas, cambiando sólo esta línea:
+            # con `approach_tolerance`, 17/20 y 4,21 mm de error medio; con estos 2,5 mm,
+            # 19/20 y 2,59 mm.
+            if self.fast_forward and np.linalg.norm(error) < 0.0025:
                 self.last_residual = float(np.linalg.norm(error))
                 return True
             commanded = commanded + error
