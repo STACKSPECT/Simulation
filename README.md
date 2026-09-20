@@ -347,7 +347,8 @@ The asymmetry worth memorising: **inside an event `payload` extra keys are harml
 missing keys break silently; at the row level extra keys are lethal**, because
 `event` / `placement` / `pallet_state` / `snapshot` take `**kwargs` and every key is a
 column. Columns are SI; payloads are mm and degrees, converted at the telemetry boundary and
-nowhere else. `task` must be `"palletizing"`.
+nowhere else. `task` is the level's **source** — `table`, `conveyor` or `truck` — taken from
+`scene.level.source`, never hard-coded; the UI shows it translated (mesa, cinta, camión).
 
 Rows are written **live** — `begin()` opens the episode, the row functions drop rows as
 things are measured, `end()` closes it with a PATCH — which is the only reason the Live
