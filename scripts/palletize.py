@@ -141,7 +141,10 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
             scene, detector, gauge, planner, seed=seed, speed=speed,
             sink=sink, verbose=args.protocol == "text",
         )
-        if args.stability_test:
+        # Los niveles de ajetreo (4x) sacuden SIEMPRE: es lo que mide la tarea, no un
+        # extra que se pide. `--stability-test` sigue sirviendo para añadírselo a
+        # cualquier otro nivel.
+        if args.stability_test or scene.level.shakes:
             _log(args, "estabilidad: ensayando 15 sacudidas y viga estrecha…")
             physical = measure.on_pallet(scene, episode.final_placements)
             episode.stability_test = run_stability_test(
@@ -196,7 +199,7 @@ def _aborted(seed: int, scene) -> EpisodeResult:
         duration_s=round(float(scene.clock), 2),
         failure=None,
         oracle=bool(getattr(scene, "oracle", False)),
-        task=scene.level.source,
+        task=scene.level.task,
         metrics={"aborted": True},
     )
 
@@ -261,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     first_scene.oracle_heightmap = args.oracle_heightmap
     log = RunLog(
         REPO,
-        task=first_scene.level.source,
+        task=first_scene.level.task,
         level=level_id,
         oracle=oracle,
         motion_speed=1.0 if speed == 0.0 else speed,

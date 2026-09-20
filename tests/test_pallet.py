@@ -27,8 +27,9 @@ from src.cell import plant  # noqa: E402
 from src.cell.render import HEIGHTMAP_BUDGET, VIEWS, draw_heightmap  # noqa: E402
 from src.cell.scene import (  # noqa: E402
     DECORS,
-    SOURCE_DECADE,
     SOURCES,
+    TASK_DECADE,
+    TASKS,
     Level,
     lane_for,
     levels,
@@ -100,14 +101,33 @@ def test_views_and_failures_match_the_schema() -> None:
     assert set(SOURCES) <= set(TASKS), sorted(set(SOURCES) - set(TASKS))
 
 
-def test_level_ids_encode_the_source() -> None:
+def test_level_ids_encode_the_task() -> None:
     catalogue = levels(CFG)
-    assert len(catalogue) == 14
-    assert len(set(catalogue)) == 14
+    assert len(catalogue) == 17
+    assert len(set(catalogue)) == 17
     assert {level.source for level in catalogue.values()} == set(SOURCES)
+    assert {level.task for level in catalogue.values()} == set(TASKS)
     for level in catalogue.values():
-        assert level.id // 10 == SOURCE_DECADE[level.source]
+        # La decena es la TAREA, no la fuente: los niveles de ajetreo cogen de la mesa
+        # y viven en la 4x. Ver la cabecera de `configs/pallet.yaml`.
+        assert level.id // 10 == TASK_DECADE[level.task]
+        assert level.task in TASKS
         assert level.decor in DECORS
+
+
+def test_the_jostling_levels_shake_without_being_asked() -> None:
+    """La decena 4x sacude porque el ensayo ES su tarea, no un extra que se pide."""
+    catalogue = levels(CFG)
+    jostling = [level for level in catalogue.values() if level.task == "ajetreo"]
+    assert len(jostling) == 3
+    for level in jostling:
+        assert level.shakes
+        assert level.id // 10 == 4
+        assert level.source in SOURCES          # siguen cogiendo de algún sitio
+    # Y ningún otro nivel sacude solo.
+    for level in catalogue.values():
+        if level.task != "ajetreo":
+            assert not level.shakes
 
 
 def test_the_plant_only_lends_its_scenery() -> None:
@@ -500,7 +520,7 @@ def test_oracle_is_any_stub_for_every_combination() -> None:
 
 def test_an_aborted_episode_is_unsuccessful_without_inventing_a_failure() -> None:
     scene = SimpleNamespace(
-        level=SimpleNamespace(id=11, source="table"),
+        level=SimpleNamespace(id=11, source="table", task="table"),
         boxes=[object()], clock=1.25, oracle=False,
     )
     result = _aborted(7, scene)

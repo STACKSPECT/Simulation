@@ -107,8 +107,15 @@ class Level:
     """Un nivel del catálogo de `configs/pallet.yaml`.
 
     El `id` es lo que se sube a `episodes.level`, y la DECENA es la tarea: 1x mesa,
-    2x cinta, 3x camión. Ver la cabecera de `configs/pallet.yaml` para por qué se
-    codifica así y no con un campo aparte.
+    2x cinta, 3x camión, 4x ajetreo. Ver la cabecera de `configs/pallet.yaml` para por
+    qué se codifica así y no con un campo aparte.
+
+    `task` y `source` NO son lo mismo, aunque en los niveles 1x-3x coincidan. `source`
+    es de dónde salen los bultos —mesa, cinta o camión, y eso decide qué `Supply` se
+    monta—; `task` es qué se está midiendo, y es lo que viaja a `episodes.task`. Los
+    niveles de ajetreo cogen de una fuente cualquiera y lo que miden es otra cosa: si
+    la pila aguanta el transporte. Por eso `task` se declara aparte y por omisión vale
+    la fuente, que es lo que hacían los niveles de antes.
     """
 
     id: int
@@ -121,14 +128,26 @@ class Level:
     cog: str = "catalogue"           # centred | catalogue | adversarial
     loader_jitter: bool = False
     decor: str = "cell"              # cell | plant — ver DECORS
+    task: str = ""                   # vacío = la fuente; ver TASKS
 
     @property
     def task_index(self) -> int:
         return self.id // 10
 
+    @property
+    def shakes(self) -> bool:
+        """Si al acabar de apilar hay que someter el palé al ensayo de transporte."""
+        return self.task == "ajetreo"
+
 
 SOURCES = ("table", "conveyor", "truck")
-SOURCE_DECADE = {"table": 1, "conveyor": 2, "truck": 3}
+
+# Qué se mide en el episodio, y con ello la decena de su `id`. Es un vocabulario CERRADO
+# y lo valida además el SDK: `theker_telemetry` compara `task` contra su propio
+# `frozenset` y la base tiene un CHECK, así que un nombre nuevo aquí no basta —hay que
+# añadirlo también en Platform antes de poder subir nada con él—.
+TASKS = ("table", "conveyor", "truck", "ajetreo")
+TASK_DECADE = {"table": 1, "conveyor": 2, "truck": 3, "ajetreo": 4}
 
 # El decorado del nivel, y con él su iluminación: los dos van juntos porque una nave con
 # las luces de un plató no es una nave. `cell` es la valla de seguridad y las marcas de
@@ -178,14 +197,17 @@ def levels(cfg: dict) -> dict[int, Level]:
             cog=str(row.get("cog", "catalogue")),
             loader_jitter=bool(row.get("loader_jitter", False)),
             decor=str(row.get("decor", "cell")),
+            task=str(row.get("task") or row["source"]),
         )
         if level.source not in SOURCES:
             raise ValueError(f"nivel {level.id}: fuente desconocida {level.source!r}")
         if level.decor not in DECORS:
             raise ValueError(f"nivel {level.id}: decorado desconocido {level.decor!r}")
-        if level.task_index != SOURCE_DECADE[level.source]:
+        if level.task not in TASKS:
+            raise ValueError(f"nivel {level.id}: tarea desconocida {level.task!r}")
+        if level.task_index != TASK_DECADE[level.task]:
             raise ValueError(
-                f"nivel {level.id}: la decena no casa con la fuente {level.source!r}. "
+                f"nivel {level.id}: la decena no casa con la tarea {level.task!r}. "
                 f"Ver la cabecera de configs/pallet.yaml."
             )
         if level.id in out:

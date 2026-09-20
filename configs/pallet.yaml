@@ -269,16 +269,23 @@ generator:
   cog_sigma: 0.10
   cog_z_bias: -0.04              # el contenido se asienta un poco por debajo del centro
 
-# ── LOS DOCE NIVELES ──────────────────────────────────────────────────────────
+# ── LOS NIVELES ───────────────────────────────────────────────────────────────
 #
-# Tres tareas: cinco niveles de mesa, tres de cinta y cuatro de camión. El `id` es lo
-# que
-# se sube a `episodes.level`, y la
-# DECENA es la tarea: 1x mesa, 2x cinta, 3x camión. Se codifica así porque la plataforma
-# tiene un solo entero por episodio y `task` es un vocabulario cerrado (todo esto es
-# `palletizing`): sin la decena, la interfaz compararía un nivel 2 de mesa contra un
-# nivel 2 de camión como si fueran lo mismo. `config.source` y `config.level_name` lo
-# dejan legible en la pantalla de ejecuciones.
+# Cuatro tareas: siete niveles de mesa, tres de cinta, cuatro de camión y tres de
+# ajetreo. El `id` es lo que se sube a `episodes.level`, y la DECENA es la TAREA:
+# 1x mesa, 2x cinta, 3x camión, 4x ajetreo. Se codifica así porque la plataforma tiene
+# un solo entero por episodio: sin la decena, la interfaz compararía un nivel 2 de mesa
+# contra un nivel 2 de camión como si fueran lo mismo. `config.source` y
+# `config.level_name` lo dejan legible en la pantalla de ejecuciones.
+#
+# `task` y `source` NO son lo mismo aunque en 1x-3x coincidan, y conviene tenerlo claro
+# antes de añadir nada: `source` es de dónde salen los bultos y decide qué `Supply` se
+# monta; `task` es qué se está midiendo. Los niveles de ajetreo cogen de la mesa y su
+# tarea es otra. Por omisión `task` vale la fuente, que es lo que hacían los de antes.
+#
+# `task` es un vocabulario CERRADO por partida doble: `TASKS` en `src/cell/scene.py` y,
+# aparte, el `frozenset` del SDK más un CHECK en la base. Inventar un nombre aquí no
+# basta para poder subirlo; hay que añadirlo también en Platform.
 #
 # Añadir un nivel es añadir una fila. Cuatro ejes suben a la vez:
 #   catálogo   un tipo -> mezcla -> sorteado del generador
@@ -457,6 +464,41 @@ levels:
   - {id: 34, source: truck,    name: "camión · N4 · nave industrial, CoG adversario",
      n_packages: 8, types: [random], yaw_jitter_deg: 0, pos_jitter_m: 0.000,
      cog: adversarial, loader_jitter: true, decor: plant}
+
+  # ── LOS NIVELES DE AJETREO ──────────────────────────────────────────────────
+  #
+  # La cuarta tarea, y la única cuya pregunta no es «¿sabe apilar?» sino «¿aguanta lo
+  # apilado?». Al acabar de colocar, el palé pasa por el ensayo de transporte de
+  # `src/cell/stability.py`: quince sacudidas —tres ejes por cinco niveles de
+  # aceleración, de 0,05 g a 0,80 g— y dos apoyos en viga estrecha. No hace falta pedir
+  # `--stability-test`: en estos niveles el ensayo ES la tarea, y por eso llevan
+  # `task: ajetreo` y viven en la decena 4x.
+  #
+  # Son los tres niveles de MESA con la misma carga, semilla a semilla. Eso es
+  # deliberado: la mesa es la fuente más controlada —sin banda que empuje ni cargador
+  # que desordene— así que lo único que separa un 41 de un 11 es el ensayo del final.
+  # Comparar 11 contra 41 con la misma semilla aísla exactamente eso, igual que 33
+  # contra 34 aísla el decorado. Si aquí se cambia la carga, dejan de responder.
+  #
+  # Qué mide cada uno, que es el eje que sube:
+  #   41  la carga fácil. Cuatro cajas iguales, alineadas, CoG centrado. Es la
+  #       REFERENCIA: si este no aguanta, lo que falla no es la pila.
+  #   42  la mezcla. Seis tipos distintos, girados, con el CoG que trae el catálogo.
+  #       Aquí empiezan a importar las bandas de altura y los apoyos parciales.
+  #   43  el duro. Ocho bultos sorteados y CoG adversario, al límite del sobre.
+  #
+  # AVISO, y no es menor: `task: ajetreo` NO se puede subir todavía. El SDK valida
+  # `task` contra su propio `frozenset` y la base tiene un CHECK, y «ajetreo» no está
+  # en ninguno de los dos. Hasta que se añada en Platform, estos niveles corren con
+  # `--no-telemetry`; con subida activa, `EpisodeResult` lanza `ValueError`.
+  - {id: 41, source: table, task: ajetreo, name: "ajetreo · N1 · carga fácil, la referencia",
+     n_packages: 4, types: [std_m], yaw_jitter_deg: 0, pos_jitter_m: 0.000, cog: centred}
+  - {id: 42, source: table, task: ajetreo, name: "ajetreo · N2 · mezcla girada",
+     n_packages: 6, types: [book_s, small, shoe_m, std_s, std_m, apparel],
+     yaw_jitter_deg: 15, pos_jitter_m: 0.010, cog: catalogue}
+  - {id: 43, source: table, task: ajetreo, name: "ajetreo · N3 · sorteado, CoG adversario",
+     n_packages: 8, types: [random], yaw_jitter_deg: 30, pos_jitter_m: 0.020,
+     cog: adversarial}
 
 # Los mandos de `src/planner/heuristic.py`, que es el adaptador sobre `placing/`.
 #
