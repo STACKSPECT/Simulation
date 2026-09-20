@@ -5,7 +5,7 @@ Portado desde `tools/stable_pallet/simulator.py`. `ArmController` expone:
 
     tcp_pose()                 pose actual del TCP
     move_to(pose)              waypoint cartesiano; False si no converge -> ik_unreachable
-    move_joints(qpos, dur)     espacio de juntas; SOLO para la foto final
+    move_joints(qpos, dur)     espacio de juntas; pesaje y pose final
     seal(index)                sella las ventosas sobre una caja; False -> grasp_slip
     release()                  corta el vacío
     is_holding()               False si la caja se escurrió -> grasp_slip
@@ -31,8 +31,12 @@ moverse el brazo? Los números y su porqué, en `configs/pallet.yaml`.
 
 **Todo el trayecto va en cartesiano a una cota de tránsito fija**: subir recto, cruzar,
 bajar recto. El rodeo por `home` en espacio de juntas tira la caja al ir y barre el
-montón al volver. `move_joints` existe sólo para la foto final, cuando ya no queda nada
-que colocar.
+montón al volver, y por eso `park()` —el apartado para la foto de cada capa— sigue
+yendo por `go_to`, en cartesiano. `move_joints` es el INTERPOLADOR que recorre cada
+waypoint cartesiano, no una maniobra alternativa: `move_to` lo llama con
+`settle=False` y deja que `_track_pose` decida cuándo enlazar el siguiente. Quien lo
+llama por su cuenta, y con el `settle=True` por defecto, es sólo lo que necesita
+reposo físico de verdad: el pesaje (`vision/gauge.py`) y `go_home()`.
 
 **El bloque de ventosas que agarra una caja estrecha está DESCENTRADO respecto al
 cuerpo**, y el brazo tiene que cancelar ese desplazamiento en cada movimiento mientras
@@ -171,6 +175,42 @@ class ArmController:
             error[1, 0] - error[0, 1],
         ])
 
+    def _joint_ranges(self) -> np.ndarray:
+        """Límites del modelo para las seis juntas, en el mismo orden que el control."""
+        scene = self.scene
+        joint_ids = [
+            self.mujoco.mj_name2id(scene.model, self.mujoco.mjtObj.mjOBJ_JOINT, name)
+            for name in scene.cfg["robot"]["joints"]
+        ]
+        return np.asarray(scene.model.jnt_range[joint_ids], dtype=float)
+
+    def _nearest_joint_target(self, target_q, reference_q=None) -> np.ndarray:
+        """El equivalente 2π más próximo que cabe dentro de los límites del UR10e.
+
+        MuJoCo acepta varias representaciones de la misma orientación en las juntas que
+        giran más de una vuelta. Normalizar siempre a [-π, π] introducía saltos de casi
+        2π entre waypoints contiguos y hacía que el brazo diese rodeos inexistentes.
+        """
+        scene = self.scene
+        target = np.asarray(target_q, dtype=float)
+        reference = (
+            np.asarray(scene.data.qpos[scene.arm_qpos], dtype=float)
+            if reference_q is None else np.asarray(reference_q, dtype=float)
+        )
+        result = target.copy()
+        for index, (value, current, limits) in enumerate(
+            zip(target, reference, self._joint_ranges())
+        ):
+            low, high = (float(bound) for bound in limits)
+            first = math.ceil((low - value) / (2 * math.pi))
+            last = math.floor((high - value) / (2 * math.pi))
+            candidates = value + 2 * math.pi * np.arange(first, last + 1)
+            if len(candidates):
+                result[index] = candidates[np.argmin(np.abs(candidates - current))]
+            else:
+                result[index] = np.clip(value, low, high)
+        return result
+
     def solve_ik(self, position, rotation) -> np.ndarray | None:
         """Mínimos cuadrados amortiguados sobre `mj_jacSite`. `None` = no converge.
 
@@ -184,6 +224,11 @@ class ArmController:
         jac_rot = np.zeros((3, scene.model.nv))
         current = np.asarray(scene.data.qpos[scene.arm_qpos]).copy()
 
+        joint_ranges = self._joint_ranges()
+        # La semilla de rescate se conserva en su rama central. Moverla al equivalente
+        # más cercano puede dejar una muñeca justo en ±2π y quitarle al solver el margen
+        # que necesita para alcanzar el otro lado de la celda. La continuidad se aplica
+        # después, al convertir la solución en una consigna articular.
         for seed in (current, scene.home.copy()):
             q = seed.copy()
             for _ in range(int(cfg["ik_iterations"])):
@@ -204,50 +249,107 @@ class ArmController:
                     jacobian @ jacobian.T + damping**2 * np.eye(6), error
                 )
                 q += np.clip(delta, -cfg["ik_step_limit"], cfg["ik_step_limit"])
-                q[2] = np.clip(q[2], -3.13, 3.13)          # el codo tiene rango limitado
-                q = (q + math.pi) % (2 * math.pi) - math.pi
+                q = np.clip(q, joint_ranges[:, 0], joint_ranges[:, 1])
         return None
 
-    def _duration(self, distance: float, approach: bool) -> float:
-        """Cuánto debe durar un waypoint. Tránsito y descenso NO van a la misma velocidad."""
+    def _duration(self, position: np.ndarray, rotation: np.ndarray, approach: bool) -> float:
+        """Duración cartesiana pedida para un waypoint, con traslación y giro."""
         cfg = self.motion
         speed = cfg["approach_speed"] if approach else cfg["cartesian_speed"]
-        return float(np.clip(distance / speed, cfg["min_move_s"], cfg["max_move_s"]))
+        distance = float(np.linalg.norm(
+            self.scene.data.site_xpos[self.scene.tcp_site] - position
+        ))
+        current_rotation = self.scene.data.site_xmat[self.scene.tcp_site].reshape(3, 3)
+        relative_rotation = rotation @ current_rotation.T
+        angular_distance = math.acos(float(np.clip(
+            (np.trace(relative_rotation) - 1.0) / 2.0, -1.0, 1.0
+        )))
+        return max(
+            distance / float(speed),
+            angular_distance / float(cfg["angular_speed"]),
+            float(cfg["min_move_s"]),
+        )
 
-    def move_joints(self, target_q, seconds: float = 0.85) -> None:
-        """Interpola en espacio de juntas y espera a que el brazo se quede quieto.
+    def _joint_duration(self, start_q: np.ndarray, target_q: np.ndarray) -> float:
+        """Mínimo para que el pico de una smoothstep no supere la ficha del UR10e."""
+        limits = np.asarray(self.motion["joint_speed_limits"], dtype=float)
+        # d/dt smoothstep alcanza 1,5 en la mitad del movimiento.
+        return float(np.max(1.5 * np.abs(target_q - start_q) / limits))
 
-        SOLO para la foto final. En espacio de juntas el recorrido no está controlado, y
-        el brazo acaba justo encima del palé: medido, meter la foto por capa con este
-        movimiento bajaba el episodio de 10/10 a 4/10 con `overhang_violation`.
-        """
+    def _step_model(self) -> None:
+        scene = self.scene
+        self.mujoco.mj_step(scene.model, scene.data)
+        scene.clock += scene.model.opt.timestep
+        scene.sync_viewer()
+
+    def _wait_until_rest(self) -> None:
+        """Espera reposo físico. Se usa donde la lectura de fuerzas lo necesita."""
         scene, cfg = self.scene, self.motion
-        start_q = np.asarray(scene.data.qpos[scene.arm_qpos], dtype=float).copy()
-        target_q = np.asarray(target_q, dtype=float)
-        steps = max(1, round(seconds / scene.model.opt.timestep))
-        for step in range(steps):
-            phase = (step + 1) / steps
-            scene.data.ctrl[:] = start_q + (target_q - start_q) * phase * phase * (3 - 2 * phase)
-            self.mujoco.mj_step(scene.model, scene.data)
-            scene.clock += scene.model.opt.timestep
-            scene.sync_viewer()
-        scene.data.ctrl[:] = target_q
-
-        # Esperar a que las juntas ALCANCEN la consigna es esperar para siempre: el servo
-        # aguanta contra la gravedad con error permanente, y un cartón en las ventosas lo
-        # empuja más. Eso es justo lo que `move_to` mide y corrige en cartesiano, así que
-        # este bucle sólo contesta a la otra pregunta: ¿ha dejado de moverse?
         still = 0
         for _ in range(int(cfg["rest_timeout"])):
             if np.max(np.abs(scene.data.qvel[scene.arm_dofs])) < cfg["rest_speed"]:
                 still += 1
                 if still >= cfg["rest_steps"]:
-                    break
+                    return
             else:
                 still = 0
-            self.mujoco.mj_step(scene.model, scene.data)
-            scene.clock += scene.model.opt.timestep
-            scene.sync_viewer()
+            self._step_model()
+
+    def _track_pose(self, position: np.ndarray, *, approach: bool) -> bool:
+        """Mantiene la consigna hasta cruzar la tolerancia propia del waypoint.
+
+        Los waypoints de tránsito se enlazan en movimiento, como un movimiento con
+        blend. Los de aproximación además esperan a que las juntas hayan frenado antes
+        de tocar una caja o el montón.
+        """
+        scene, cfg = self.scene, self.motion
+        tolerance = (
+            float(cfg["approach_tolerance"]) if approach else self.reach_tolerance
+        )
+        timeout_steps = max(
+            1, round(float(cfg["tracking_timeout_s"]) / scene.model.opt.timestep)
+        )
+        stable = 0
+        for _ in range(timeout_steps):
+            residual = float(np.linalg.norm(
+                position - scene.data.site_xpos[scene.tcp_site]
+            ))
+            slow_enough = (
+                not approach
+                or np.max(np.abs(scene.data.qvel[scene.arm_dofs]))
+                < float(cfg["approach_end_speed"])
+            )
+            if residual <= tolerance and slow_enough:
+                stable += 1
+                if stable >= int(cfg["tracking_steps"]):
+                    return True
+            else:
+                stable = 0
+            self._step_model()
+        return False
+
+    def move_joints(self, target_q, seconds: float = 0.85, *, settle: bool = True) -> None:
+        """Interpola en juntas sin superar sus velocidades y, si se pide, espera reposo.
+
+        Las maniobras cartesianas llaman con ``settle=False`` y deciden con
+        `_track_pose` cuándo enlazar el siguiente waypoint. El pesaje y la pose final sí
+        necesitan reposo completo y conservan el valor por defecto.
+        """
+        scene = self.scene
+        start_q = np.asarray(scene.data.qpos[scene.arm_qpos], dtype=float).copy()
+        target_q = self._nearest_joint_target(target_q, start_q)
+        seconds = max(float(seconds), self._joint_duration(start_q, target_q))
+        # Redondear hacia arriba mantiene el pico por debajo del límite también cuando
+        # la duración calculada cae entre dos ticks de MuJoCo.
+        steps = max(1, math.ceil(seconds / scene.model.opt.timestep))
+        for step in range(steps):
+            phase = (step + 1) / steps
+            scene.data.ctrl[:] = start_q + (target_q - start_q) * phase * phase * (3 - 2 * phase)
+            self._step_model()
+        scene.data.ctrl[:] = target_q
+
+        if settle:
+            self._wait_until_rest()
 
     def _snap_to(self, target_q) -> None:
         """Pone el brazo en una pose resuelta sin recorrer el camino.
@@ -285,12 +387,24 @@ class ArmController:
             if self.fast_forward:
                 self._snap_to(target_q)
             else:
-                distance = float(np.linalg.norm(
-                    scene.data.site_xpos[scene.tcp_site] - commanded))
-                seconds = self._duration(distance, approach) if attempt == 0 else 0.28
-                self.move_joints(target_q, seconds)
+                seconds = self._duration(commanded, pose.rotation, approach)
+                self.move_joints(target_q, seconds, settle=False)
+                if self._track_pose(desired_tool, approach=approach):
+                    self.last_residual = float(np.linalg.norm(
+                        desired_tool - scene.data.site_xpos[scene.tcp_site]
+                    ))
+                    return True
             error = desired_tool - scene.data.site_xpos[scene.tcp_site]
-            if np.linalg.norm(error) < 0.0025:
+            # Los dos caminos aceptan con umbrales DISTINTOS a propósito. En física
+            # completa manda `_track_pose` con `approach_tolerance`: ahí hay un servo que
+            # frenar y el enlace de waypoints necesita ese margen —bajarlo a 2,5 mm tira
+            # L31 s1 y L31 s3 a `stack_collapse` con 0 cajas—. El fast-forward
+            # TELETRANSPORTA: no hay reposo que quitar ni waypoints que enlazar, así que
+            # no recibe ninguno de los beneficios del cambio y aflojarlo sólo cuesta
+            # precisión. Medido sobre la rejilla de 20 celdas, cambiando sólo esta línea:
+            # con `approach_tolerance`, 17/20 y 4,21 mm de error medio; con estos 2,5 mm,
+            # 19/20 y 2,59 mm.
+            if self.fast_forward and np.linalg.norm(error) < 0.0025:
                 self.last_residual = float(np.linalg.norm(error))
                 return True
             commanded = commanded + error
@@ -301,6 +415,10 @@ class ArmController:
         # una celda lo coge por una esquina y lo deja en otro sitio.
         residual = float(np.linalg.norm(desired_tool - scene.data.site_xpos[scene.tcp_site]))
         self.last_residual = residual
+        # `approach_tolerance` fuerza las correcciones finas. El umbral que distingue
+        # una aproximación imperfecta de una pose realmente inalcanzable sigue siendo
+        # `reach_tolerance`: el servo cargado acaba habitualmente a 5-8 mm, mientras que
+        # una pose que no puede sostener falla por centenares de milímetros.
         return residual <= self.reach_tolerance
 
     # ── la ventosa ───────────────────────────────────────────────────────────

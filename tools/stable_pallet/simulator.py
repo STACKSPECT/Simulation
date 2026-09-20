@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 
 from .com_markers import ComMarkers
-from .controls import SPEED_SCALE, RunCancelled, ViewerControls
+from .controls import RunCancelled, ViewerControls
 from .models import Package, Placement, StackState
 from .pallet_com import PalletCom, com_from_world_points, compare_pallet_com, estimate_pallet_com
 from .planner import Candidate, StablePalletPlanner
@@ -1128,15 +1128,14 @@ class PalletizingSimulator:
 
     @property
     def frame_pause(self) -> float:
-        """Wall-clock seconds to wait per step: a simulated second takes
-        1 / (speed * SPEED_SCALE).
+        """Wall-clock seconds to wait per step, so one simulated second takes 1/speed.
 
         Zero while the probe is settling or when the operator asked for no pacing: the
         cell then runs as fast as the machine allows, still executing every trajectory.
         """
         if self._pacing_suspended or not self.controls.paced:
             return 0.0
-        return self.model.opt.timestep / (self.controls.speed * SPEED_SCALE)
+        return self.model.opt.timestep / self.controls.speed
 
     def _capture_frame(self, force: bool = False) -> None:
         if self.playback is not None:

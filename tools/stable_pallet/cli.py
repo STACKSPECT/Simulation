@@ -339,7 +339,7 @@ def _add_viewer_args(parser: argparse.ArgumentParser) -> None:
         "--speed",
         type=float,
         default=1.0,
-        help="Wall-clock pacing: 1 runs SPEED_SCALE (x4) simulated seconds per second, 0 removes it",
+        help="Wall-clock pacing: 1 runs one simulated second per second, 0 removes the pacing",
     )
     parser.add_argument(
         "--fast-forward",

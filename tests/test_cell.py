@@ -20,8 +20,10 @@ from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
 from src.cell.scene import build_catalogue, build_scene, levels, load_configs  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
+from src.episode import run_episode  # noqa: E402
+from src.planner.heuristic import ScorePlanner  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
-from src.vision.oracle import OracleDetector  # noqa: E402
+from src.vision.oracle import OracleDetector, OracleGauge  # noqa: E402
 
 
 def test_levels_declare_distinct_loads() -> None:
@@ -275,6 +277,41 @@ def test_ik_reaches_the_pick_and_pallet_envelope() -> None:
             assert not failed, f"nivel {level}: poses fuera de alcance: {failed}"
         finally:
             scene.close()
+
+
+def test_joint_targets_use_the_nearest_equivalent_angle() -> None:
+    """Una consigna al otro lado de ±π no debe ordenar casi una vuelta completa."""
+    scene = build_scene(level_id=11, simplified=True)
+    try:
+        arm = ArmController(scene)
+        reference = np.asarray(scene.data.qpos[scene.arm_qpos], dtype=float).copy()
+        reference[0] = 3.10
+        target = reference.copy()
+        target[0] = -3.10
+        nearest = arm._nearest_joint_target(target, reference)
+        assert abs(nearest[0] - reference[0]) < 0.10
+        low, high = arm._joint_ranges()[0]
+        assert low <= nearest[0] <= high
+    finally:
+        scene.close()
+
+
+def test_level_11_physical_cycle_finishes_under_50_simulated_seconds() -> None:
+    """Regresión del ciclo que tardaba 75,9 s por parar después de cada waypoint."""
+    scene = build_scene(level_id=11, seed=1, simplified=True)
+    try:
+        episode = run_episode(
+            scene,
+            OracleDetector(),
+            OracleGauge(),
+            ScorePlanner(scene.cfg),
+            seed=1,
+            speed=1.0,
+        )
+        assert episode.success, episode.failure
+        assert episode.duration_s < 50.0
+    finally:
+        scene.close()
 
 
 def test_wrist_gauge_recovers_mass_and_planar_cog() -> None:
