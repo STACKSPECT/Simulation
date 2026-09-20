@@ -57,10 +57,11 @@ bash scripts/setup.sh        # venv + deps + SDK + arm model
 source .venv/bin/activate
 ```
 
-`scripts/setup.sh` is the only executable path in the repo today, and it does four
-things: creates `.venv`, installs `requirements.txt`, installs the `theker_telemetry`
-SDK **editable from the Platform repo**, and clones `mujoco_menagerie` into
-`third_party/`.
+`scripts/setup.sh` prepares the environment: it creates `.venv`, installs
+`requirements.txt`, installs the `theker_telemetry` SDK **editable from the Platform
+repo**, and clones `mujoco_menagerie` into `third_party/`. The runtime entry points are
+`scripts/palletize.py` for the cell and `scripts/train_weights.py` for robot-free weight
+training.
 
 Point it elsewhere with the `PLATFORM` variable if your clone is not at `../Platform`:
 
@@ -95,20 +96,22 @@ of whoever stores the data, so it is installed editable from Platform by `setup.
 There is no CI. The verification ladder is defined in **`AGENTS.md` §9** and it is
 ordered cheapest-first on purpose — run it in this order and stop at the first failure:
 
+0. **The vendored heuristic alone:** `python -m placing` — fifteen checks, including its
+   NumPy-only import boundary.
 1. **No network, no simulator:** `python tests/test_pallet.py` — fails in seconds.
 2. **The measurement alone:** `python -m src.measure` — its own asserts.
-3. **Without Supabase:** `python scripts/palletize.py -n 1 --no-telemetry` — one whole
-   episode to disk; inspect the `episodes.jsonl` under `runs/`.
-4. **With telemetry, and it must say which mode it is in.** If it does not print that
+3. **The physical cell:** `python tests/test_cell.py` — sources, cameras, IK, gauge,
+   robot-free training and stability.
+4. **Without Supabase:** `python scripts/palletize.py -n 1 --no-telemetry --level 21` —
+   one whole episode to disk; inspect the `episodes.jsonl` under `runs/`.
+5. **The moved demonstrator:** `cd tools && uv run --extra dev pytest`. Keep the extra
+   explicit so a fresh `uv` environment cannot pick up a global `pytest` executable.
+6. **With telemetry, and it must say which mode it is in.** If it does not print that
    telemetry is active, it is not.
-5. **With the platform UI open in a browser.** This is the real test: the episode shows
+7. **With the platform UI open in a browser.** This is the real test: the episode shows
    up *in progress* within seconds, the pallet builds package by package, the KPIs move
    on their own.
-6. **Against the database**, afterwards — the SQL checks are in `AGENTS.md` §9.
-
-Note that **none of these six rungs can be run today** — `tests/test_pallet.py`,
-`src/measure.py` and `scripts/palletize.py` are all still to be written. Until they
-exist, the only thing a contributor can actually execute is `bash scripts/setup.sh`.
+8. **Against the database**, afterwards — the SQL checks are in `AGENTS.md` §9.
 
 ### The tests use no framework, on purpose
 

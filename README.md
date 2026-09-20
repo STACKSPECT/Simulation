@@ -172,6 +172,38 @@ convention: `python -m placing` runs fifteen checks and the first asserts that n
 leaked into `sys.modules` — which is what lets the weights be tuned in milliseconds instead of
 minutes of physics.
 
+### Training the score weights without the robot
+
+`scripts/train_weights.py` tunes those fourteen weights with direct policy search. It does not
+compile or move the UR10e, run a source, or simulate the suction cycle: each package is placed at
+the pose selected by `ScorePlanner`, MuJoCo settles the free box, and the resulting load runs the
+same 15 transport jolts and two narrow-beam trials as a cell episode. The default is deliberately
+small:
+
+```bash
+python scripts/train_weights.py --levels 16 --seeds 1 --iterations 3 --population 4
+```
+
+The optimiser is the cross-entropy method (CEM), a dependency-free episodic policy search. Its
+loss is `missing * (stability_trials + 1) + fallen_boxes`: leaving a package off the pallet is
+therefore always worse than placing that package and seeing it fail every restored stability
+trial. `fallen_boxes` counts box/trial failures, so the same package falling in two independently
+restored trials counts twice.
+
+Every run is auditable under `runs/<timestamp>-weight-training/`:
+
+- `manifest.json` records the scenarios, optimiser seed, Git state, objective and protocol;
+- `config_snapshot.json` and its SHA-256 pin the exact effective configuration;
+- `source_snapshot/` and per-file SHA-256 hashes preserve the exact policy code, including
+  uncommitted work;
+- `progress.jsonl` is flushed after every placement, stability trial and evaluation;
+- `evaluations/*.json` keeps every chosen pose, score breakdown and full stability result;
+- `best_weights.json` and `summary.json` contain the final recommendation.
+
+This is an oracle decision benchmark, not a claim about end-to-end cell performance. Promising
+weights still need the normal robot episodes because this loop intentionally removes perception,
+IK, reachability error and gripper collisions.
+
 ## The cell
 
 Each folder is a boundary — you work inside one without opening the others.
@@ -300,7 +332,8 @@ real components against oracle stubs, so only it can compute a run's `oracle` fl
 
 ## Usage
 
-`scripts/palletize.py` is the entry point.
+`scripts/palletize.py` is the cell entry point. Weight training has its own
+`scripts/train_weights.py` entry point described above.
 
 | Flag | Effect |
 |---|---|
@@ -404,6 +437,7 @@ The loop runs end to end on all three sources today. What does not:
 | Wrist gauge | ✅ | Mass and planar CoM recovered |
 | Beam search planner | ✅ | The planner the [results](#results) were measured with. Opt-in behind `--beam-planner` |
 | Scoring heuristic | ✅ | What the CLI still constructs when no planner flag is given. 15 checks, no simulator |
+| Weight trainer | ✅ | Robot-free CEM policy search; physical box settling and all 17 stability trials, with durable JSON/JSONL traces |
 | Measurement + live telemetry | ✅ | Rows verified against the schema |
 | Control panel | ✅ | Both modes, fourteen levels |
 | Height map from cameras | 🟡 | Runs, not at parity: level 11 seed 1 places 3/4 against the oracle's 4/4, ending in `wrong_placement`. Hence `allow_unobserved: true` — coverage over an empty pallet measures 93.3 %, not the 98 % that would justify `false` |
@@ -436,11 +470,11 @@ expect them to have moved up.
 | | Command | Proves | Result |
 |---|---|---|---|
 | 0 | `python -m placing` | The heuristic alone; first check is the import boundary | `15 checks passed` |
-| 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations | `25 comprobaciones pasadas` |
+| 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `30 comprobaciones pasadas` |
 | 2 | `python -m src.measure` | CoG with out-of-tolerance boxes, margin against the support polygon | `ok measure.demo` |
-| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge | `17 comprobaciones físicas pasadas` |
+| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `18 comprobaciones físicas pasadas` |
 | 4 | `python scripts/palletize.py -n 1 --no-telemetry --level 21` | A whole episode to disk | `4/4 · ÉXITO` |
-| 5 | `cd tools && uv run pytest` | The demonstrator survived being moved | `203 passed` in 70 s |
+| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `208 passed` in 41 s |
 
 > Rung 5 was red on `c8d84ac`: two `tools/tests/test_webapp.py` assertions still demanded a
 > nine-level catalogue while `configs/pallet.yaml` had grown past it. The level `34` commit

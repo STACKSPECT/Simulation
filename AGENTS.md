@@ -120,7 +120,7 @@ python scripts/palletize.py --stability-test    # al final: 15 sacudidas y viga 
 python tests/test_pallet.py                     # comprobaciones, sin simulador ni red
 python tests/test_cell.py                       # las tres fuentes, cámaras, IK y el gauge
 python -m src.measure                           # la medida, con sus asserts
-cd tools && uv run pytest                       # el demostrador sobrevive a la mudanza
+cd tools && uv run --extra dev pytest           # el demostrador sobrevive a la mudanza
 ```
 
 El SDK `theker_telemetry` **no vive aquí**: es el contrato de lo que la plataforma
@@ -547,6 +547,34 @@ lo necesita: el resumen va dentro de `metrics` del episodio (≈0.5 KB, que es `
 donde sobrar es inocuo) y el detalle de las 17 pruebas a `stability.json` en el
 directorio del run, que no llega a la base.
 
+### El entrenamiento de pesos sin robot
+
+`src/training.py::simulate_placement` existe para ajustar los 14 pesos sin pagar el
+coste ni mezclar los fallos del brazo. Construye la escena con `with_robot=False`, usa la
+verdad del catálogo y el mapa oráculo, pone cada caja a `drop_clearance` sobre la pose de
+`ScorePlanner` y deja que MuJoCo la asiente. Después ejecuta el MISMO ensayo de 15
+sacudidas y dos vigas. No usa fuente, percepción, IK ni ventosa: sus resultados miden la
+decisión y no sustituyen la validación del episodio entero.
+
+La métrica `fallen_boxes_total` cuenta pares caja-ensayo con `fell_off=true`. Cada ensayo
+restaura la pila de referencia, así que si el mismo paquete cae en dos pruebas cuenta dos
+veces; `unique_fallen_boxes` conserva además el número de ids distintos. La función de
+pérdida es `missing * (n_trials + 1) + fallen_boxes_total`: una política que no coloca
+nada no puede ganar artificialmente con cero caídas.
+
+`scripts/train_weights.py` aplica CEM, una búsqueda de política episódica sin dependencias
+nuevas. **No escribe los pesos aprendidos en `configs/pallet.yaml`.** Deja la propuesta en
+`best_weights.json`; promoverla a configuración exige repetir la escalera normal con brazo
+y documentar la medida junto a los pesos.
+
+Los logs son parte del contrato del entrenador. Cada run crea
+`runs/<timestamp>-weight-training/` con `manifest.json`, `config_snapshot.json` y su
+SHA-256, `source_snapshot/` con el código exacto aunque el worktree esté sucio,
+`progress.jsonl` sincronizado a disco después de cada colocación, ensayo y evaluación,
+el detalle completo bajo `evaluations/`, `best_weights.json` y `summary.json`. No se
+sustituye ese JSONL por una barra de progreso: si el proceso se corta, la última fila
+tiene que decir exactamente qué evaluación estaba corriendo.
+
 ### El decorado
 
 `levels[].decor` dice en qué sitio pasa el nivel. Es un vocabulario cerrado de dos
@@ -655,7 +683,9 @@ Las calibraciones están en las cabeceras de `configs/scene.yaml` y
 7. **Con `/` abierto en el navegador.** Es la prueba de verdad: el episodio aparece **en
    curso** a los pocos segundos, el palé se monta paquete a paquete, los KPIs se mueven
    solos y al acabar pasa a terminado con su éxito o su causa de fallo.
-8. **El demostrador:** `cd tools && uv run pytest`.
+8. **El demostrador:** `cd tools && uv run --extra dev pytest`. El extra es explícito:
+   con un entorno nuevo, `uv run pytest` puede encontrar el ejecutable global antes de
+   instalar las dependencias de desarrollo y coleccionar con el Python equivocado.
 9. **El panel:** un nivel de mesa, cinta y camión en EJECUCIÓN y DEPURACIÓN; el modo
    debe estar visible y DEPURACIÓN debe avisar que no publica. Cambiar de nivel tiene
    que cambiar la carga (catálogo, número, ruido, CoG), no solo el título de la
