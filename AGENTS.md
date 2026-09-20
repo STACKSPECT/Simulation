@@ -296,24 +296,59 @@ estación y se para. El camión presenta la carga completa y elige siempre la ca
 alta, la única que no sostiene otra. `release()` se llama cuando la mano ya no está
 encima de la fuente.
 
-Además de la fuente, **los doce niveles montan una mesa auxiliar vacía** a la derecha
-del palé. No entrega paquetes ni cambia `Supply`: es una superficie física común donde
-el robot puede apartar uno si una estrategia lo necesita. **Hoy no la consume ningún
-camino del código**; se acepta a propósito como superficie disponible. Deja **100 mm de
-aire** hasta el palé para no contaminar su medida — y eso es más importante de lo que
-suena: su cara superior está 436 mm POR ENCIMA de la cubierta, así que desde el punto de
-vista del brazo es una pared, no una mesa. Con los 50 mm que tenía antes, la herramienta
-bajaba pegada a ella sobre los huecos de canto —que son justo los que mejor puntúa el
-planificador— y tiraba la carga: nivel 33, semilla 1, `--speed 1`, la cuarta caja medida
-a 1674 mm y `stack_collapse`. **En fast-forward no se ve**, porque el brazo teletransporta
-entre waypoints; el visor y el panel sí corren el tramo que roza. Ver la cabecera de
-`auxiliary_table` en `configs/scene.yaml`, que trae el barrido entero.
+Además de la fuente, **todos los niveles montan una mesa auxiliar vacía**, hoy a la
+IZQUIERDA del palé. No entrega paquetes ni cambia `Supply`: es una superficie física
+común donde el robot puede apartar uno si una estrategia lo necesita. **Hoy no la
+consume ningún camino del código**; se acepta a propósito como superficie disponible.
+
+**Ese mueble tiene DOS restricciones que tiran en sentidos opuestos**, se descubrieron
+por separado y una posición que cumpla sólo una rompe la otra en silencio. Las dos
+juntas son lo que fija `[-0.37, -0.10]`; la cabecera de `auxiliary_table` en
+`configs/scene.yaml` trae los dos barridos enteros.
+
+1. **Aire: al menos 100 mm al palé.** Su cara superior está 436 mm POR ENCIMA de la
+   cubierta, así que desde el punto de vista de la celda es una pared, no una mesa. Con
+   50 mm, la caja que se deposita en los huecos de canto —que son justo los que mejor
+   puntúa el planificador— da contra ella y sale despedida: nivel 33, semilla 1,
+   `--speed 1`, la cuarta caja medida a 1674 mm y `stack_collapse`. Precisión que hace
+   falta para vigilarlo: **quien toca es la CARGA, no la mano** —la herramienta no baja
+   de 35,1 mm de holgura y los 2265 contactos son todos de la caja—, así que un test
+   que mire la herramienta no ve nada.
+2. **Lado: no puede estar en +X.** Durante el ensayo de estabilidad el palé se suelta
+   de su weld y **viaja entero**, +309 mm en la sacudida de 0,80 g. A la derecha eso la
+   mete en la trayectoria, y **el aire no lo arregla**: con 100 mm a la derecha el nivel
+   11 semilla 1 da mínima 10,3 y no aguanta las 15 — peor que con los 50 mm de antes.
+   A la izquierda la deriva es ≤ 0,1 mm, porque el impulso es un seno de periodo
+   completo y la posición sólo se acumula hacia +eje.
+
+**Los dos fallos son invisibles en la escalera de §9, y por motivos distintos.** El
+primero sólo aparece con `--speed 1`: en fast-forward el brazo teletransporta entre
+waypoints y nunca recorre el tramo que roza, así que el nivel salía 8/8 con la mesa mal
+puesta. El segundo no mueve ninguna caja de sitio: la pila sólo desliza 31,5 mm contra
+un umbral de 30. De ahí que haya **tres** tests y que uno de ellos corra a `--speed 1`
+(`test_no_cargo_touches_the_furniture_at_full_speed`). **Cualquier mueble que se acerque
+al palé tiene que pasar por los dos regímenes**, no sólo por el mapa de alturas.
+
+Y ojo con la lectura fácil del segundo arreglo: **en las sacudidas lo que protege no es
+el aire en planta, es la banda en z.** La pila asoma sobre el canto izquierdo hasta
+117,6 mm ya en reposo —lo pone el planificador—, más que los 120 mm que deja la mesa; lo
+que salva es que su único geom con colisión es la tapa, z[0.50, 0.58]. Subir `height`,
+engrosar la tapa o dar colisión a las patas invalida esa medida.
 
 Lo comprobado de esa mesa es **su centro, no su huella**: cabe ahí el bulto máximo
 girado, y `tests/test_cell.py` deja un bulto reposando en él de verdad. Parte de la
-huella queda fuera del alcance del UR10e —68 de 81 celdas a la cota de suelta, 54 de 81
-a la de aproximación—, así que una estrategia que quiera soltar fuera del centro tiene que repetir
-antes el barrido de IK. Las cifras y el barrido están en `configs/scene.yaml`.
+huella queda fuera del alcance del UR10e, así que una estrategia que quiera soltar fuera
+del centro tiene que repetir antes el barrido de IK. Las cifras y el barrido están en
+`configs/scene.yaml`.
+
+**El sitio no tiene holgura para elegir a ojo.** En -X lo acotan tres cosas a la vez: la
+mesa de recogida llega a y=-0.46, la cinta a y=-0.55 y el alcance se acaba en x=-0.37.
+Eso deja 120 mm de aire como TECHO, apenas por encima de los 100 mm que pide la
+restricción 1 — por eso existe solución, y por poco. Si alguien encoge ese margen, las
+dos restricciones dejan de caber a la vez y hay que replantear la **altura** de la mesa
+o sacarla de la escena mientras corre el ensayo. La Y manda tanto como la X aunque no dé
+aire: a y=-0.12 la mesa se mete en la maniobra del camión y el nivel 33 cae de 8/8 a
+2/8 con `ik_unreachable`.
 
 Dos avisos:
 

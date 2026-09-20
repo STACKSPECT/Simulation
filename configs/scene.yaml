@@ -98,12 +98,16 @@ table:
 # Mesa auxiliar común a todos los niveles. No es una fuente: empieza vacía y queda
 # disponible para que el robot aparte un bulto si una estrategia futura lo necesita.
 #
-# ── 100 mm DE AIRE AL PALÉ, NO 50, Y ÉSE ES EL MOTIVO DEL NÚMERO ──────────────
-# Estaba en [1.50, -0.05]: huella x[1.25, 1.75], y[-0.38, 0.28], o sea a 50 mm del
+# ESTA MESA TIENE DOS RESTRICCIONES Y TIRAN EN SENTIDOS OPUESTOS. Las dos se
+# descubrieron por separado, cada una con su propio instrumento, y una posición que
+# cumpla sólo una de las dos ROMPE la otra en silencio. Van las dos seguidas.
+#
+# ── RESTRICCIÓN 1: AIRE. 100 mm AL PALÉ, NO 50 ────────────────────────────────
+# Estuvo en [1.50, -0.05]: huella x[1.25, 1.75], y[-0.38, 0.28], o sea a 50 mm del
 # canto +X del palé (x=1.20). Y no es una valla baja: su cara superior está en z=0.58,
 # que son 436 mm POR ENCIMA de la cubierta (z=0.144). Una pared de 44 cm a 50 mm del
 # borde donde el planificador MÁS quiere colocar —los huecos de canto puntúan bien:
-# bajos, apoyo 100 %—, con la herramienta bajando pegada a ella.
+# bajos, apoyo 100 %—, con la maniobra de suelta pegada a ella.
 #
 # Eso no se ve como un choque, se ve como que la caja sale despedida. Nivel 33,
 # semilla 1, con interpolación real (`--speed 1`, que es lo que corren el visor y el
@@ -113,13 +117,52 @@ table:
 # ahí que el nivel estuviera verde 8/8 y aun así se cayera en cuanto se miraba. Es la
 # trampa de la escalera de comprobación de AGENTS.md §9: se corre en fast-forward.
 #
-# En [1.55, -0.30] quedan 100 mm y el episodio sale 8/8 a `--speed 1`, con la cuarta
-# caja en 4.8 mm en vez de 1674. Duplicar el hueco basta. Comprobado también en los
-# niveles 11 y 21, que son las otras dos fuentes.
+# PRECISIÓN sobre QUIÉN toca, que importa para saber qué vigilar: contando los pares
+# de contacto de MuJoCo en esa reproducción, la MANO no roza nunca —su holgura mínima
+# es 35.1 mm— y los 2265 contactos son todos de la CARGA. Lo que da contra la mesa es
+# la caja que se está depositando, no la herramienta. Un test que vigile sólo la
+# herramienta no vería nada.
+#
+# Con 100 mm el episodio sale 8/8 a `--speed 1`, con la cuarta caja en 4.8 mm en vez
+# de 1674. Duplicar el hueco basta. Comprobado en las tres fuentes.
+#
+# ── RESTRICCIÓN 2: LADO. LA MESA NO PUEDE ESTAR EN +X ─────────────────────────
+# Y ésta es la que obliga a cruzar el palé, porque NINGUNA posición de la derecha la
+# cumple. Durante el ensayo de estabilidad el palé se suelta de su weld y flota bajo
+# la fuerza aplicada, así que VIAJA ENTERO: en la sacudida de 0.80 g en X recorre
+# +309 mm. Con la mesa a la derecha eso la mete en la trayectoria.
+#
+#   mesa            sacudidas  mínima  aguanta las 15
+#   [ 1.50, -0.05]   95.0/100    47.4  NO
+#   [ 1.55, -0.30]   94.0/100    10.3  NO   <- los 100 mm de la restricción 1
+#   [ 1.80, -0.05]   99.9/100    99.0  sí   <- 350 mm, y fuera de alcance
+#   [-0.37, -0.10]   99.9/100    99.0  sí   <- aquí
+#
+# Fíjate en que 100 mm de aire NO arreglan esto: con [1.55, -0.30] la mínima sale 10.3,
+# PEOR que con los 50 mm de antes. El aire y el lado son cosas distintas.
+#
+# El lado izquierdo se libra porque el impulso es un seno de un periodo completo: la
+# velocidad vuelve a cero pero la POSICIÓN no, así que la deriva va siempre a +eje.
+# Envolvente barrida por palé y cajas durante las 15 sacudidas y las dos vigas:
+#
+#   x [-0.0000, +1.5086]   y [-0.4002, +0.7087]   (en reposo x[0, 1.20] y[±0.40])
+#
+# +309 mm a la derecha y CERO a la izquierda. Comprobado contra la mesa AUSENTE
+# (llevada a [3.00, -0.05]) en 38 celdas que cubren todos los niveles: los tres números
+# del resumen salen bit a bit iguales y hay CERO contactos con la mesa en las 38.
+#
+# Ojo: lo que protege en las sacudidas no es el aire en planta sino la BANDA EN Z. La
+# pila asoma sobre el canto izquierdo hasta 117.6 mm ya en reposo —lo pone el
+# planificador, no la sacudida—, más que los 120 mm justos; lo que salva es que el
+# único geom con colisión de esta mesa es la tapa, z[0.50, 0.58]. Subir `height`,
+# engrosar la tapa o dar colisión a las patas invalida esas 38 celdas.
 #
 # ── EL LÍMITE NO ES EL ALCANCE, ES EL WAYPOINT DE APROXIMACIÓN ────────────────
-# Apartarla más, o llevarla al otro lado del palé, NO se puede, y conviene dejar
-# escrito por qué para que nadie lo vuelva a intentar. La mesa sólo es útil si el brazo
+# Apartarla más NO se puede, y conviene dejar escrito por qué para que nadie lo vuelva
+# a intentar. (Esta tabla se barrió cuando la mesa estaba a la derecha; de aquel
+# barrido sólo el punto (-0.55,-0.05) cae de este lado, y en efecto no llega. Pero el
+# lado izquierdo SÍ tiene sitio más cerca: el barrido fino está debajo.)
+# La mesa sólo es útil si el brazo
 # resuelve DOS poses sobre su centro con la herramienta girada 90 grados: la de suelta
 # del bulto más alto del generador (z=0.8835) y el waypoint de aproximación
 # `place_clearance` por encima (z=1.0635). Es lo que exige
@@ -161,11 +204,42 @@ table:
 # Aun así, lo verificado y lo único que hay que usar es EL CENTRO. Si alguna estrategia
 # futura quiere depositar fuera de él, tiene que repetir este barrido antes.
 #
+# ── EL BARRIDO DE ESTE LADO, Y POR QUÉ 120 mm ES EL TECHO ─────────────────────
+# En -X el sitio lo acotan TRES cosas a la vez y no queda holgura para elegir a ojo:
+# la mesa de recogida ocupa hasta y=-0.46 y la cinta hasta y=-0.55, así que la mesa no
+# puede bajar de y≈-0.13; y el alcance se acaba en x=-0.37. Con la prueba BUENA —sellar
+# un bulto, llevarlo y dejarlo reposando, no resolver el IK; AGENTS.md §7—:
+#
+#   centro           aire   std_m   bulto máximo (0.55 x 0.40 x 0.30)
+#   [-0.35, -0.10]  100 mm  2.4 mm  3.2 mm  PASA
+#   [-0.36, -0.10]  110 mm  2.4 mm  3.1 mm  PASA
+#   [-0.37, -0.10]  120 mm  2.4 mm  3.1 mm  PASA   <- elegido, el máximo que llega
+#   [-0.38, -0.10]  130 mm  2.4 mm  no alcanza la aproximación
+#   [-0.39, -0.12]  140 mm  2.4 mm  no alcanza la aproximación
+#   [-0.40, -0.13]  150 mm  2.4 mm  no alcanza la aproximación
+#
+# 120 mm > los 100 mm que la restricción 1 pide, y por eso existe solución. Si alguien
+# encoge ese margen, las dos restricciones dejan de caber a la vez y hay que replantear
+# la ALTURA de la mesa o sacarla de la escena durante el ensayo.
+#
+# Y la Y importa tanto como la X, aunque no dé aire: bajarla a y=-0.12 mete la mesa en
+# la maniobra del camión y el nivel 33 semilla 1 cae de 8/8 a 2/8 con `ik_unreachable`.
+# Se quedó en y=-0.10, que es donde el 33 sigue 8/8 con 50.3 mm de holgura de mano.
+#
+# COMPROBADO A `--speed 1` contra la posición de la derecha, 14 celdas de nivel x
+# semilla: las 14 dan EL MISMO resultado —mismas colocadas, mismo fallo, mismo peor
+# error— y cero contactos con la mesa en las 11 que no fallaban ya. En las tres que
+# fallan igual en los dos sitios (L13 s1, L23 s1 y L32 s1, todas `stack_collapse` con
+# la mesa a la derecha también), la pila al derrumbarse cae sobre esta mesa: el
+# veredicto no cambia, pero el estado posterior al fallo sí. Queda dicho.
+#
 # El centro no se queda en el IK: `tests/test_cell.py` sella un bulto y lo deja
-# reposando ahí de verdad (`test_robot_can_leave_a_package_on_the_auxiliary_table`).
+# reposando ahí de verdad (`test_robot_can_leave_a_package_on_the_auxiliary_table`),
+# y `test_no_cargo_touches_the_furniture_at_full_speed` corre a `--speed 1`, que es el
+# único régimen donde se ve la restricción 1.
 auxiliary_table:
-  center: [1.55, -0.30]
-  size: [0.25, 0.33, 0.04]        # SEMIEJES; huella x[1.30, 1.80], y[-0.63, 0.03]
+  center: [-0.37, -0.10]
+  size: [0.25, 0.33, 0.04]        # SEMIEJES; huella x[-0.62, -0.12], y[-0.43, 0.23]
   height: 0.58                    # la misma cota que la mesa de recogida (arriba), a
                                   # propósito: una sola altura de suelta reaprovecha su
                                   # barrido de alcance. No se midió por separado.

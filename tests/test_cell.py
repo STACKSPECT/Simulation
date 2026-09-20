@@ -196,6 +196,82 @@ def test_level_11_stack_survives_all_fifteen_jolts() -> None:
         scene.close()
 
 
+def _episode_contacts_with(
+    level: int, seed: int, geom_name: str, centre: list[float] | None = None
+) -> tuple[int, object]:
+    """Contactos con un mueble durante el EPISODIO, con interpolación real.
+
+    `speed=1.0` es el punto entero: deja `arm.fast_forward` apagado y el brazo recorre
+    de verdad el tramo que en fast-forward se salta teletransportando.
+    """
+    cfg = load_configs()
+    if centre is not None:
+        cfg = {**cfg, "auxiliary_table": {**cfg["auxiliary_table"], "center": centre}}
+    scene = build_scene(cfg, level_id=level, seed=seed, simplified=False)
+    original = scene.mujoco.mj_step
+    try:
+        target = scene.mujoco.mj_name2id(
+            scene.model, scene.mujoco.mjtObj.mjOBJ_GEOM, geom_name
+        )
+        assert target >= 0, f"no existe el geom {geom_name!r}"
+        tally = 0
+
+        def counting_step(model, data, nstep=1):
+            nonlocal tally
+            original(model, data, nstep)
+            for index in range(data.ncon):
+                contact = data.contact[index]
+                if target in (int(contact.geom1), int(contact.geom2)):
+                    tally += 1
+
+        scene.mujoco.mj_step = counting_step
+        episode = run_episode(
+            scene, OracleDetector(), OracleGauge(), ScorePlanner(scene.cfg),
+            seed=seed, speed=1.0,
+        )
+        return tally, episode
+    finally:
+        scene.mujoco.mj_step = original
+        scene.close()
+
+
+def test_no_cargo_touches_the_furniture_at_full_speed() -> None:
+    """El mueble está fuera del volumen de trabajo, y esto se corre a `--speed 1`.
+
+    La otra mitad de la regresión de mobiliario, y la que NINGÚN test vigilaba. La mesa
+    auxiliar tiene la cara superior 436 mm por encima de la cubierta: para la celda es
+    una pared. Con 50 mm de aire, la caja que se deposita en los huecos de canto —los
+    que mejor puntúa el planificador— da contra ella y sale despedida: nivel 33
+    semilla 1, cuarta caja medida a 1674 mm, `stack_collapse`, 2265 contactos.
+
+    Dos cosas que hacen falta para que esto se vea, y las dos son fáciles de perder:
+
+    - **`speed=1.0`**, o sea SIN `arm.fast_forward`. En fast-forward el brazo
+      teletransporta entre waypoints, nunca recorre el tramo que roza, y el nivel sale
+      8/8 con la mesa mal puesta. La escalera de AGENTS.md §9 corre en fast-forward:
+      por eso el fallo sobrevivió a toda la batería.
+    - **Contar la CARGA, no la mano.** Medido sobre la reproducción: la herramienta no
+      roza nunca —su holgura mínima es 35.1 mm— y los 2265 contactos son todos de la
+      caja que se está depositando. Un test que vigile la mano no ve nada.
+
+    Las celdas son las que salen limpias en las dos posiciones candidatas; L13 s1,
+    L23 s1 y L32 s1 quedan fuera a propósito porque ya terminan en `stack_collapse`
+    con la mesa a la derecha, así que no distinguen nada. El barrido entero está en la
+    cabecera de `configs/scene.yaml: auxiliary_table`.
+    """
+    for level, seed in ((33, 1), (11, 1)):
+        contacts, episode = _episode_contacts_with(level, seed, "auxiliary_table")
+        assert contacts == 0, (
+            f"nivel {level} semilla {seed}: la mesa auxiliar recibió {contacts} "
+            f"contactos durante el episodio a speed=1 "
+            f"({episode.n_placed}/{episode.n_objects}, {episode.failure}). "
+            "Si acabas de mover un mueble o de acercarlo al palé, es eso."
+        )
+        assert episode.success, (
+            f"nivel {level} semilla {seed} terminó en {episode.failure} a speed=1"
+        )
+
+
 def _shake_contacts_with(level: int, seed: int, geom_name: str) -> tuple[int, dict]:
     """Contactos entre la pila y un geom nombrado DURANTE las 15 sacudidas.
 
