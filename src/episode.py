@@ -71,8 +71,9 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
     episode = Episode(seed=seed, n_objects=len(scene.boxes))
     scene.episode_specs = {}
     scene.episode_plans = {}
-    # Los bultos que pesan sobre el palé, para que el visor pinte sus centros de masa.
-    # Ver `render.draw_overlay`.
+    # Para que el visor pinte los centros de masa —ver `render.draw_overlay`—: lo que
+    # la muñeca ha medido de cada bulto, por su índice, y los que pesan sobre el palé.
+    scene.weighed_specs = {}
     scene.load_placements = []
     supply = getattr(scene, "supply", None)
     if supply is None:
@@ -121,6 +122,7 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
 
         spec = gauge.measure(scene, arm, observation)
         scene.episode_specs[attempt] = spec
+        scene.weighed_specs[box.index] = spec
         # `active_cups` y `grip_capacity_ratio` sobran para la interfaz de hoy, y eso es
         # inocuo en un `payload`. Van porque un `grasp_slip` se ve venir en el ratio: la
         # ventosa pierde margen antes de soltar la caja.

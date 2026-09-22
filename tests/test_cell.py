@@ -22,10 +22,12 @@ from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import (  # noqa: E402
     ERROR_RGBA,
     ESTIMATED_COM_RGBA,
+    ESTIMATED_LOAD_RGBA,
     GHOST_ALPHA,
     LOAD_RADIUS,
     PACKAGE_RADIUS,
     TRUE_COM_RGBA,
+    TRUE_LOAD_RGBA,
     VIEWS,
     draw_overlay,
 )
@@ -158,13 +160,18 @@ def test_the_com_markers_show_through_translucent_boxes() -> None:
 
     scene = build_scene(level_id=11, seed=1, simplified=False)
     try:
-        box = scene.boxes[0]
+        # El 0 está en el palé; el 1 ya se pesó pero no se ha soltado —como si
+        # estuviera en la mano—, y los demás siguen sin tocar.
+        box, weighed = scene.boxes[0], scene.boxes[1]
         px, py = scene.pallet_center
         scene.place_box(box.index, (px, py, scene.deck_z + box.dims_m[2] / 2 + 0.002))
         scene.settle(0.5)
         # Lo que cree la celda, desviado a propósito para que el error no sea cero.
         believed = np.asarray(box.cog_offset_m, dtype=float) + np.array([0.03, -0.02, 0.0])
         spec = SimpleNamespace(cog_offset_m=believed, mass_kg=box.mass_kg)
+        in_hand = SimpleNamespace(cog_offset_m=np.array([-0.01, 0.02, 0.0]),
+                                  mass_kg=weighed.mass_kg)
+        scene.weighed_specs = {box.index: spec, weighed.index: in_hand}
         scene.load_placements = [SimpleNamespace(box=box, spec=spec)]
         opt = mujoco.MjvOption()
         scene.viewer = SimpleNamespace(
@@ -187,10 +194,10 @@ def test_the_com_markers_show_through_translucent_boxes() -> None:
         assert all(g.rgba[3] <= GHOST_ALPHA + 1e-6 for g in ghosts)
         assert np.array_equal(scene.model.geom_rgba[:, 3], alphas_before)
 
-        body = scene.body_id(box.index)
-        truth = scene.data.xipos[body]
-        rotation = scene.data.xmat[body].reshape(3, 3)
-        belief = scene.data.xpos[body] + rotation @ believed
+        def belief_of(index, offset):
+            body = scene.body_id(index)
+            rotation = scene.data.xmat[body].reshape(3, 3)
+            return scene.data.xpos[body] + rotation @ offset
 
         def spheres(rgba, radius):
             return [
@@ -200,14 +207,38 @@ def test_the_com_markers_show_through_translucent_boxes() -> None:
                 and np.isclose(g.size[0], radius)
             ]
 
-        # Con un solo bulto, su CoG y el de la carga son el mismo punto.
-        for rgba, point in ((TRUE_COM_RGBA, truth), (ESTIMATED_COM_RGBA, belief)):
-            assert any(np.allclose(p, point, atol=1e-6) for p in spheres(rgba, PACKAGE_RADIUS))
-            assert any(np.allclose(p, point, atol=1e-6) for p in spheres(rgba, LOAD_RADIUS))
+        def matches(points, expected):
+            # `mjvGeom.pos` es float32: se compara con tolerancia, no redondeando.
+            left = [np.asarray(point, dtype=float) for point in expected]
+            if len(points) != len(left):
+                return False
+            for point in points:
+                hit = next((i for i, other in enumerate(left)
+                            if np.allclose(point, other, atol=1e-5)), None)
+                if hit is None:
+                    return False
+                left.pop(hit)
+            return True
+
+        # Verde en TODOS los bultos, estén donde estén; naranja sólo en los pesados.
+        assert matches(spheres(TRUE_COM_RGBA, PACKAGE_RADIUS),
+                       [scene.data.xipos[scene.body_id(b.index)] for b in scene.boxes])
+        assert matches(spheres(ESTIMATED_COM_RGBA, PACKAGE_RADIUS),
+                       [belief_of(box.index, believed),
+                        belief_of(weighed.index, in_hand.cog_offset_m)])
+
+        # La pila es sólo lo que está en el palé: con un bulto, su mismo punto, pero
+        # en sus propios colores, y sin texto en ningún geom.
+        truth = scene.data.xipos[scene.body_id(box.index)]
+        belief = belief_of(box.index, believed)
+        for rgba, point in ((TRUE_LOAD_RGBA, truth), (ESTIMATED_LOAD_RGBA, belief)):
+            assert matches(spheres(rgba, LOAD_RADIUS), [point])
             # La plomada acaba en la cubierta, justo debajo.
             feet = spheres(rgba, PACKAGE_RADIUS * 0.8)
-            assert any(np.allclose(p[:2], point[:2], atol=1e-3)
-                       and abs(p[2] - scene.deck_z) < 2e-3 for p in feet), feet
+            assert len(feet) == 1
+            assert np.allclose(feet[0][:2], point[:2], atol=1e-3)
+            assert abs(feet[0][2] - scene.deck_z) < 2e-3
+        assert all(g.label == "" for g in geoms)
         errors = [g for g in geoms if np.allclose(g.rgba, ERROR_RGBA, atol=1e-3)]
         assert len(errors) == 1
         assert np.allclose(np.array(errors[0].pos), (truth + belief) / 2, atol=1e-6)

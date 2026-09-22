@@ -349,7 +349,7 @@ real components against oracle stubs, so only it can compute a run's `oracle` fl
 | `--no-oracle-heightmap` | Build the map from the three cameras |
 | `--precise-com` | Sweep several wrist poses instead of one plumb reading |
 | `--video`, `--show-com`, `--simplified-graphics` | Timelapse, final CoG in the report, cheap visuals |
-| `--show-true-com`, `--show-estimated-com` | With `--viewer`: green real and orange computed centres of mass, a yellow error line between the two load markers, and the boxes drawn translucent so the markers show (`1` makes them solid again) |
+| `--show-true-com`, `--show-estimated-com` | With `--viewer`: each box's real centre of mass in green from the start, and its computed one in orange from the moment the wrist weighs it; the stack's in blue and magenta, with a yellow error line between them. The boxes are drawn translucent so the markers show (`1` makes them solid again) |
 | `--protocol json` | Line protocol — how the panel drives it |
 
 The startup line always names the planner and where the height map came from: two runs being

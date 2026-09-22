@@ -38,11 +38,15 @@ from src.cell.scene import PACKAGE_GROUP
 # `backend/sql/003_snapshots.sql` en Platform: pídeselo a quien lleve el backend.
 VIEWS = ("top", "side", "iso", "camera")
 
-# Los centros de masa del visor, con los colores y tamaños del demostrador
-# (`tools/stable_pallet/com_markers.py`), que son los que enseñan las casillas del panel:
-# verde lo real, naranja lo calculado y amarillo el error entre los dos.
+# Los centros de masa del visor, con los tamaños del demostrador
+# (`tools/stable_pallet/com_markers.py`). Los de cada bulto llevan los colores de las
+# casillas del panel —verde lo real, naranja lo calculado—; los de la pila, otros dos,
+# porque sin texto encima el color es lo único que los distingue. El amarillo es el
+# error entre las dos pilas.
 TRUE_COM_RGBA = (0.16, 0.92, 0.45, 0.95)
 ESTIMATED_COM_RGBA = (1.00, 0.46, 0.10, 0.95)
+TRUE_LOAD_RGBA = (0.20, 0.55, 1.00, 0.95)
+ESTIMATED_LOAD_RGBA = (0.93, 0.28, 0.85, 0.95)
 ERROR_RGBA = (0.98, 0.86, 0.22, 0.85)
 GHOST_ALPHA = 0.25
 PACKAGE_RADIUS = 0.018
@@ -163,14 +167,19 @@ def draws_com(scene) -> bool:
 
 
 def draw_overlay(scene) -> None:
-    """Pinta los centros de masa del montón, y los bultos en fantasma para verlos.
+    """Pinta los centros de masa, y los bultos en fantasma para verlos.
 
     **Verde**, dónde está de verdad el peso de cada bulto (`xipos`, lo que integra
-    MuJoCo). **Naranja**, dónde cree la celda que está: la pose del bulto más el
-    `cog_offset_m` que midió el gauge. Las esferas grandes son el CoG de toda la carga,
-    con su plomada hasta la cubierta, y la línea **amarilla** entre las dos es el error.
-    Los bultos son los que `src/episode.py` cuenta sobre el palé, los mismos con los que
-    `measure.pallet_state` saca la traza de CoG.
+    MuJoCo), y en todos desde el principio: esperando, en la fuente o en la mano.
+    **Naranja**, dónde cree la celda que está: la pose del bulto más el `cog_offset_m`
+    que midió el gauge. Sale al pesarlo, con el bulto ya en la mano y antes de
+    planificar, porque antes no hay medida que pintar; la distancia al verde es el error
+    con el que el planificador elige hueco.
+
+    Las esferas grandes, con su plomada hasta la cubierta, son el CoG de la PILA:
+    **azul** el real y **magenta** el calculado, y la línea **amarilla** entre los dos es
+    el error. Sólo cuentan los bultos que `src/episode.py` da por puestos en el palé,
+    los mismos con los que `measure.pallet_state` saca la traza de CoG.
 
     **Un CoG está DENTRO de su cartón**, así que con los bultos opacos las esferas no se
     ven. Al abrir el visor con marcadores, `palletize.py` apaga el grupo de los bultos
@@ -199,7 +208,7 @@ def draw_overlay(scene) -> None:
         scn.ngeom += 1
         return geom
 
-    def sphere(position, radius: float, rgba, label: str = "") -> None:
+    def sphere(position, radius: float, rgba) -> None:
         geom = next_geom()
         if geom is None:
             return
@@ -211,7 +220,6 @@ def draw_overlay(scene) -> None:
             mat=identity,
             rgba=np.array(rgba, dtype=np.float32),
         )
-        geom.label = label
 
     def line(start, end, width: float, rgba) -> None:
         geom = next_geom()
@@ -250,22 +258,28 @@ def draw_overlay(scene) -> None:
 
     show_true = bool(getattr(scene, "show_true_com", False))
     show_estimated = bool(getattr(scene, "show_estimated_com", False))
-    true_points, true_masses = [], []
-    believed_points, believed_masses = [], []
-    for placement in getattr(scene, "load_placements", []):
-        body = scene.body_id(placement.box.index)
-        true_points.append(np.array(data.xipos[body], dtype=float))
-        true_masses.append(float(model.body_mass[body]))
+
+    def true_com(index: int) -> np.ndarray:
+        return np.array(data.xipos[scene.body_id(index)], dtype=float)
+
+    def believed_com(index: int, spec) -> np.ndarray:
+        body = scene.body_id(index)
         rotation = np.asarray(data.xmat[body], dtype=float).reshape(3, 3)
-        offset = np.asarray(placement.spec.cog_offset_m, dtype=float)
-        believed_points.append(np.asarray(data.xpos[body], dtype=float) + rotation @ offset)
-        believed_masses.append(float(placement.spec.mass_kg))
+        offset = np.asarray(spec.cog_offset_m, dtype=float)
+        return np.asarray(data.xpos[body], dtype=float) + rotation @ offset
+
     if show_true:
-        for point in true_points:
-            sphere(point, PACKAGE_RADIUS, TRUE_COM_RGBA)
+        for box in scene.boxes:
+            sphere(true_com(box.index), PACKAGE_RADIUS, TRUE_COM_RGBA)
     if show_estimated:
-        for point in believed_points:
-            sphere(point, PACKAGE_RADIUS, ESTIMATED_COM_RGBA)
+        for index, spec in getattr(scene, "weighed_specs", {}).items():
+            sphere(believed_com(index, spec), PACKAGE_RADIUS, ESTIMATED_COM_RGBA)
+
+    load_placements = getattr(scene, "load_placements", [])
+    true_points = [true_com(p.box.index) for p in load_placements]
+    true_masses = [float(model.body_mass[scene.body_id(p.box.index)]) for p in load_placements]
+    believed_points = [believed_com(p.box.index, p.spec) for p in load_placements]
+    believed_masses = [float(p.spec.mass_kg) for p in load_placements]
 
     # La plomada baja a la cubierta del palé, no al suelo, y sigue su inclinación:
     # en el ensayo de estabilidad el palé se ladea y la plomada tiene que ladearse con él.
@@ -273,20 +287,20 @@ def draw_overlay(scene) -> None:
     deck = np.asarray(data.xpos[scene.pallet_body], dtype=float) + pallet[:, 2] * scene.deck_z
     normal = pallet[:, 2]
 
-    def load(points, masses, rgba, label: str):
+    def load(points, masses, rgba):
         total = sum(masses)
         if total <= 0.0:
             return None
         centre = sum(mass * point for mass, point in zip(masses, points)) / total
         foot = centre - normal * float(np.dot(centre - deck, normal))
-        sphere(centre, LOAD_RADIUS, rgba, label)
+        sphere(centre, LOAD_RADIUS, rgba)
         line(foot, centre, PLUMB_WIDTH, rgba)
         sphere(foot, PACKAGE_RADIUS * 0.8, rgba)
         return centre
 
-    truth = load(true_points, true_masses, TRUE_COM_RGBA, "CoM real") if show_true else None
+    truth = load(true_points, true_masses, TRUE_LOAD_RGBA) if show_true else None
     belief = (
-        load(believed_points, believed_masses, ESTIMATED_COM_RGBA, "CoM calculado")
+        load(believed_points, believed_masses, ESTIMATED_LOAD_RGBA)
         if show_estimated else None
     )
     if truth is not None and belief is not None:
