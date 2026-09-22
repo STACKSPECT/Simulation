@@ -112,6 +112,10 @@ def _palletize_argv(request: dict[str, Any]) -> list[str]:
         argv.append("--simplified-graphics")
     if request.get("show_com"):
         argv.append("--show-com")
+    if request.get("show_true_com"):
+        argv.append("--show-true-com")
+    if request.get("show_estimated_com"):
+        argv.append("--show-estimated-com")
     if request.get("stability_test"):
         argv.append("--stability-test")
     argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
@@ -288,9 +292,10 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Traduce la tarjeta y el modo que eligió la página a la petición del entrypoint.
 
     Los dos modos llevan `source` y `level`. DEPURACIÓN no elige un experimento legado:
-    `PalletizeClient` añade `--no-telemetry` según `mode`. Cualquiera de las dos casillas
-    de centro de masa enciende `--show-com`: el entrypoint sólo tiene esa bandera, y
-    pinta el CoG final del palé en el informe. El ensayo de estabilidad va en los dos
+    `PalletizeClient` añade `--no-telemetry` según `mode`. Cada casilla de centro de
+    masa manda su bandera —`--show-true-com` y `--show-estimated-com`—, que pinta sus
+    marcadores en el visor; cualquiera de las dos enciende además `--show-com`, que
+    añade el CoG final del palé al informe. El ensayo de estabilidad va en los dos
     modos y se anuncia en el título, que es lo único que distingue un run con ensayo.
     """
     item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
@@ -309,6 +314,8 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         "fast_forward": bool(payload.get("fast_forward")),
         "simplified_graphics": bool(payload.get("simplified_graphics")),
         "show_com": bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com")),
+        "show_true_com": bool(payload.get("show_true_com")),
+        "show_estimated_com": bool(payload.get("show_estimated_com")),
         "stability_test": bool(payload.get("stability_test")),
         "seed": payload.get("seed"),
     }

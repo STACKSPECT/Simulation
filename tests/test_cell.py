@@ -8,6 +8,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -18,7 +19,16 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 from src.cell import tcp_frame  # noqa: E402
 from src.cell.arm import ArmController  # noqa: E402
 from src.cell.conveyor import Belt, make_supply  # noqa: E402
-from src.cell.render import VIEWS  # noqa: E402
+from src.cell.render import (  # noqa: E402
+    ERROR_RGBA,
+    ESTIMATED_COM_RGBA,
+    GHOST_ALPHA,
+    LOAD_RADIUS,
+    PACKAGE_RADIUS,
+    TRUE_COM_RGBA,
+    VIEWS,
+    draw_overlay,
+)
 from src.cell.scene import (  # noqa: E402
     PACKAGE_GROUP,
     build_catalogue,
@@ -134,6 +144,81 @@ def test_the_1_key_hides_the_packages_and_nothing_else() -> None:
                 )
         finally:
             scene.close()
+
+
+def test_the_com_markers_show_through_translucent_boxes() -> None:
+    """Las casillas de centro de masa pintan algo, y donde dicen.
+
+    Antes las dos acababan en `--show-com`, que sólo añade el CoG al informe: se
+    encendían y el visor no enseñaba nada. Y un CoG está DENTRO de su cartón, así que
+    además hay que ver a través: con el grupo de los bultos apagado, `draw_overlay` los
+    pinta translúcidos sin tocar el `rgba` del modelo, que leen también las cámaras.
+    """
+    import mujoco
+
+    scene = build_scene(level_id=11, seed=1, simplified=False)
+    try:
+        box = scene.boxes[0]
+        px, py = scene.pallet_center
+        scene.place_box(box.index, (px, py, scene.deck_z + box.dims_m[2] / 2 + 0.002))
+        scene.settle(0.5)
+        # Lo que cree la celda, desviado a propósito para que el error no sea cero.
+        believed = np.asarray(box.cog_offset_m, dtype=float) + np.array([0.03, -0.02, 0.0])
+        spec = SimpleNamespace(cog_offset_m=believed, mass_kg=box.mass_kg)
+        scene.load_placements = [SimpleNamespace(box=box, spec=spec)]
+        opt = mujoco.MjvOption()
+        scene.viewer = SimpleNamespace(
+            user_scn=mujoco.MjvScene(scene.model, maxgeom=2000), opt=opt,
+        )
+        alphas_before = scene.model.geom_rgba[:, 3].copy()
+
+        scene.heightmap_geoms = 5                 # la rejilla va delante y no se pisa
+        scene.viewer.user_scn.ngeom = 5
+        draw_overlay(scene)
+        assert scene.viewer.user_scn.ngeom == 5, "sin casillas no se pinta nada"
+
+        scene.show_true_com = scene.show_estimated_com = True
+        opt.geomgroup[PACKAGE_GROUP] = 0          # como lo deja `palletize.py`
+        draw_overlay(scene)
+        scn = scene.viewer.user_scn
+        geoms = [scn.geoms[i] for i in range(5, scn.ngeom)]
+        ghosts = [g for g in geoms if g.type == mujoco.mjtGeom.mjGEOM_BOX]
+        assert len(ghosts) == len(scene.boxes)
+        assert all(g.rgba[3] <= GHOST_ALPHA + 1e-6 for g in ghosts)
+        assert np.array_equal(scene.model.geom_rgba[:, 3], alphas_before)
+
+        body = scene.body_id(box.index)
+        truth = scene.data.xipos[body]
+        rotation = scene.data.xmat[body].reshape(3, 3)
+        belief = scene.data.xpos[body] + rotation @ believed
+
+        def spheres(rgba, radius):
+            return [
+                np.array(g.pos) for g in geoms
+                if g.type == mujoco.mjtGeom.mjGEOM_SPHERE
+                and np.allclose(g.rgba, rgba, atol=1e-3)
+                and np.isclose(g.size[0], radius)
+            ]
+
+        # Con un solo bulto, su CoG y el de la carga son el mismo punto.
+        for rgba, point in ((TRUE_COM_RGBA, truth), (ESTIMATED_COM_RGBA, belief)):
+            assert any(np.allclose(p, point, atol=1e-6) for p in spheres(rgba, PACKAGE_RADIUS))
+            assert any(np.allclose(p, point, atol=1e-6) for p in spheres(rgba, LOAD_RADIUS))
+            # La plomada acaba en la cubierta, justo debajo.
+            feet = spheres(rgba, PACKAGE_RADIUS * 0.8)
+            assert any(np.allclose(p[:2], point[:2], atol=1e-3)
+                       and abs(p[2] - scene.deck_z) < 2e-3 for p in feet), feet
+        errors = [g for g in geoms if np.allclose(g.rgba, ERROR_RGBA, atol=1e-3)]
+        assert len(errors) == 1
+        assert np.allclose(np.array(errors[0].pos), (truth + belief) / 2, atol=1e-6)
+
+        opt.geomgroup[PACKAGE_GROUP] = 1          # la tecla `1`: bultos opacos
+        draw_overlay(scene)
+        geoms = [scn.geoms[i] for i in range(5, scn.ngeom)]
+        assert not [g for g in geoms if g.type == mujoco.mjtGeom.mjGEOM_BOX]
+    finally:
+        scene.viewer = None
+        scene.close()
 
 
 def test_all_four_cameras_exist() -> None:

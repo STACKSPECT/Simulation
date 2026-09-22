@@ -349,6 +349,7 @@ real components against oracle stubs, so only it can compute a run's `oracle` fl
 | `--no-oracle-heightmap` | Build the map from the three cameras |
 | `--precise-com` | Sweep several wrist poses instead of one plumb reading |
 | `--video`, `--show-com`, `--simplified-graphics` | Timelapse, final CoG in the report, cheap visuals |
+| `--show-true-com`, `--show-estimated-com` | With `--viewer`: green real and orange computed centres of mass, a yellow error line between the two load markers, and the boxes drawn translucent so the markers show (`1` makes them solid again) |
 | `--protocol json` | Line protocol — how the panel drives it |
 
 The startup line always names the planner and where the height map came from: two runs being
@@ -472,9 +473,9 @@ expect them to have moved up.
 | 0 | `python -m placing` | The heuristic alone; first check is the import boundary | `15 checks passed` |
 | 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `30 comprobaciones pasadas` |
 | 2 | `python -m src.measure` | CoG with out-of-tolerance boxes, margin against the support polygon | `ok measure.demo` |
-| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `19 comprobaciones físicas pasadas` |
+| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `20 comprobaciones físicas pasadas` |
 | 4 | `python scripts/palletize.py -n 1 --no-telemetry --level 21` | A whole episode to disk | `4/4 · ÉXITO` |
-| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `208 passed` in 41 s |
+| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `209 passed` |
 
 > Rung 5 was red on `c8d84ac`: two `tools/tests/test_webapp.py` assertions still demanded a
 > nine-level catalogue while `configs/pallet.yaml` had grown past it. The level `34` commit

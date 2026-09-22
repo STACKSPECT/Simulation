@@ -21,7 +21,7 @@ import imageio.v3 as iio  # noqa: E402
 from theker_telemetry import EpisodeResult, RunLog  # noqa: E402
 
 from src import measure  # noqa: E402
-from src.cell.render import draw_heightmap  # noqa: E402
+from src.cell.render import draw_heightmap, draws_com  # noqa: E402
 from src.cell.scene import PACKAGE_GROUP, build_scene, levels, load_configs  # noqa: E402
 from src.cell.stability import run_stability_test  # noqa: E402
 from src.episode import run_episode  # noqa: E402
@@ -52,6 +52,11 @@ def parser() -> argparse.ArgumentParser:
                      help="segundos de pausa entre episodios")
     cli.add_argument("--show-com", action="store_true",
                      help="incluye el CoG final en el informe")
+    cli.add_argument("--show-true-com", action="store_true",
+                     help="con visor, pinta en verde los CoG reales, los que integra MuJoCo")
+    cli.add_argument("--show-estimated-com", action="store_true",
+                     help="con visor, pinta en naranja los CoG calculados, los que usa "
+                          "el robot; con los dos, la línea amarilla es el error")
     cli.add_argument("--simplified-graphics", action="store_true")
     cli.add_argument("--video", type=Path,
                      help="guarda un timelapse MP4 con las vistas cenitales")
@@ -170,10 +175,21 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
         if last is not None:
             draw_heightmap(scene, last)
 
-    _log(args, f"visor: m mapa de alturas · {PACKAGE_GROUP} esconde/enseña los bultos")
+    scene.show_true_com = args.show_true_com
+    scene.show_estimated_com = args.show_estimated_com
+    if draws_com(scene):
+        _log(args, f"visor: m mapa de alturas · {PACKAGE_GROUP} bultos opacos/translúcidos")
+    else:
+        _log(args, f"visor: m mapa de alturas · {PACKAGE_GROUP} esconde/enseña los bultos")
     with mujoco.viewer.launch_passive(
         scene.model, scene.data, key_callback=on_key
     ) as viewer:
+        # Un CoG está dentro de su cartón: con los bultos opacos las esferas no se ven.
+        # Se apaga su grupo UNA vez y `draw_overlay` los pinta translúcidos; el `1` los
+        # devuelve opacos. Forzarlo en cada fotograma dejaría la tecla muerta.
+        if draws_com(scene):
+            with viewer.lock():
+                viewer.opt.geomgroup[PACKAGE_GROUP] = 0
         scene.viewer = viewer
         try:
             return execute()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import signal
 import sys
 import threading
@@ -313,6 +314,8 @@ def test_the_selected_level_reaches_the_entrypoint(
         "fast_forward": False,
         "simplified_graphics": False,
         "show_com": False,
+        "show_true_com": False,
+        "show_estimated_com": False,
         "stability_test": False,
         "seed": 1,
     }
@@ -374,21 +377,37 @@ def test_debug_argv_changes_when_the_level_changes() -> None:
 
 
 @pytest.mark.parametrize(
-    ("payload", "expected"),
+    ("payload", "true_com", "estimated_com"),
     [
-        ({}, False),
-        ({"show_true_com": True}, True),
-        ({"show_estimated_com": True}, True),
-        ({"show_true_com": True, "show_estimated_com": True}, True),
+        ({}, False, False),
+        ({"show_true_com": True}, True, False),
+        ({"show_estimated_com": True}, False, True),
+        ({"show_true_com": True, "show_estimated_com": True}, True, True),
     ],
 )
-def test_either_centre_of_mass_switch_turns_on_show_com(
-    payload: dict[str, Any], expected: bool,
+def test_each_centre_of_mass_switch_reaches_its_own_flag(
+    payload: dict[str, Any], true_com: bool, estimated_com: bool,
 ) -> None:
-    """El entrypoint sólo tiene `--show-com`: las dos casillas comparten bandera."""
+    """Cada casilla pinta sus marcadores en el visor, y no las de la otra.
+
+    Antes las dos compartían `--show-com`, que sólo añade el CoG final al informe: se
+    encendían y en la ventana no aparecía nada. `--show-com` sigue yendo con cualquiera
+    de las dos, por el informe.
+    """
     request, _ = _run_request({"experiment": "level-11", "mode": "debug", **payload})
-    assert request["show_com"] is expected
-    assert ("--show-com" in _palletize_argv(request)) is expected
+    argv = _palletize_argv(request)
+    assert ("--show-true-com" in argv) is true_com
+    assert ("--show-estimated-com" in argv) is estimated_com
+    assert ("--show-com" in argv) is (true_com or estimated_com)
+
+
+def test_the_centre_of_mass_switches_start_off() -> None:
+    """Los marcadores vuelven translúcidos los bultos: se piden, no vienen puestos."""
+    page = (webapp.STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("show-true", "show-estimated"):
+        tag = re.search(rf'<input[^>]*id="{name}"[^>]*>', page)
+        assert tag is not None, name
+        assert "checked" not in tag.group(0), tag.group(0)
 
 
 def test_an_unknown_experiment_is_refused(served: Any) -> None:

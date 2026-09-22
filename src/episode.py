@@ -71,6 +71,9 @@ def run_episode(scene, detector: Detector, gauge: Gauge, planner: Planner,
     episode = Episode(seed=seed, n_objects=len(scene.boxes))
     scene.episode_specs = {}
     scene.episode_plans = {}
+    # Los bultos que pesan sobre el palé, para que el visor pinte sus centros de masa.
+    # Ver `render.draw_overlay`.
+    scene.load_placements = []
     supply = getattr(scene, "supply", None)
     if supply is None:
         supply = make_supply(scene)
@@ -329,7 +332,9 @@ def _record(episode: Episode, scene, arm: ArmController, index: int, drift: floa
         for old, new in zip(episode.placements, done)
     )
     episode.placements = done
-    state = measure.pallet_state(measure.on_pallet(scene, done))
+    load = measure.on_pallet(scene, done)
+    scene.load_placements = load
+    state = measure.pallet_state(load)
     episode.states.append(state)
     episode.drifts.append(drift)
     last = done[-1]

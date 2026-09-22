@@ -33,7 +33,7 @@ uv run stable-pallet plan --scenario scenarios/mixed_boxes.yaml    # sin física
 uv run stable-pallet simulate --viewer --no-measure-com            # ver la celda
 uv run stable-pallet shake --instant-place --no-measure-com        # solo el palé
 uv run stable-pallet benchmark --trials 20                         # contra first-fit
-uv run --extra dev pytest                                          # 208 comprobaciones
+uv run --extra dev pytest                                          # 209 comprobaciones
 ```
 
 El panel muestra catorce tarjetas, tomadas de `configs/pallet.yaml`, y un selector de
@@ -50,10 +50,13 @@ al tema: no viajan al servidor ni cambian lo que se lanza.
 Cada ajuste viaja como bandera al arrancar; el hijo informa por una tubería de ida y no
 escucha. Lo que no tiene bandera sale apagado del panel, con su porqué escrito al lado:
 la barra de reproducción (`--protocol json` no emite `state`, así que no hay grabación),
-«Pesar cada caja en la muñeca» (issue #25) y «Dejar el visor abierto al acabar». Las dos
-casillas de centro de masa comparten `--show-com`, y «Ensayo de estabilidad al terminar»
-manda `--stability-test` en los dos modos: sí tiene bandera, va encendida, y el título
-del run acaba en `· ESTABILIDAD` para que un run con ensayo se distinga de uno sin él.
+«Pesar cada caja en la muñeca» (issue #25) y «Dejar el visor abierto al acabar». Cada
+casilla de centro de masa manda su bandera —`--show-true-com` y `--show-estimated-com`—,
+salen apagadas y, encendidas, vuelven translúcidos los bultos en el visor para que se
+vean los marcadores; cualquiera de las dos añade además `--show-com`, que lleva el CoG
+final al informe. «Ensayo de estabilidad al terminar» manda `--stability-test` en los
+dos modos: sí tiene bandera, va encendida, y el título del run acaba en `· ESTABILIDAD`
+para que un run con ensayo se distinga de uno sin él.
 
 El aspecto del panel es el de la marca STACKSPECT: `stable_pallet/web/tokens.css` es una
 copia de `Platform/frontend/styles/colors.css` y `app/globals.css` (colores en claro y

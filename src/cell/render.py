@@ -32,9 +32,23 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from src.cell.scene import PACKAGE_GROUP
+
 # Vocabulario cerrado de `snapshots.view`. Ampliarlo obliga a tocar el CHECK de
 # `backend/sql/003_snapshots.sql` en Platform: pídeselo a quien lleve el backend.
 VIEWS = ("top", "side", "iso", "camera")
+
+# Los centros de masa del visor, con los colores y tamaños del demostrador
+# (`tools/stable_pallet/com_markers.py`), que son los que enseñan las casillas del panel:
+# verde lo real, naranja lo calculado y amarillo el error entre los dos.
+TRUE_COM_RGBA = (0.16, 0.92, 0.45, 0.95)
+ESTIMATED_COM_RGBA = (1.00, 0.46, 0.10, 0.95)
+ERROR_RGBA = (0.98, 0.86, 0.22, 0.85)
+GHOST_ALPHA = 0.25
+PACKAGE_RADIUS = 0.018
+LOAD_RADIUS = 0.034
+PLUMB_WIDTH = 0.004
+ERROR_WIDTH = 0.006
 
 
 @dataclass(frozen=True)
@@ -87,7 +101,9 @@ def draw_heightmap(scene, heightmap) -> None:
     silence_com_markers(viewer, mujoco)
     scn = viewer.user_scn
     scn.ngeom = 0
+    scene.heightmap_geoms = 0
     if not getattr(scene, "show_heightmap", False):
+        draw_overlay(scene)
         viewer.sync()
         return
 
@@ -135,7 +151,146 @@ def draw_heightmap(scene, heightmap) -> None:
             )
             count += 1
     scn.ngeom = count
+    scene.heightmap_geoms = count
+    draw_overlay(scene)
     viewer.sync()
+
+
+def draws_com(scene) -> bool:
+    """Si alguna de las dos casillas de centro de masa está encendida."""
+    return bool(getattr(scene, "show_true_com", False)
+                or getattr(scene, "show_estimated_com", False))
+
+
+def draw_overlay(scene) -> None:
+    """Pinta los centros de masa del montón, y los bultos en fantasma para verlos.
+
+    **Verde**, dónde está de verdad el peso de cada bulto (`xipos`, lo que integra
+    MuJoCo). **Naranja**, dónde cree la celda que está: la pose del bulto más el
+    `cog_offset_m` que midió el gauge. Las esferas grandes son el CoG de toda la carga,
+    con su plomada hasta la cubierta, y la línea **amarilla** entre las dos es el error.
+    Los bultos son los que `src/episode.py` cuenta sobre el palé, los mismos con los que
+    `measure.pallet_state` saca la traza de CoG.
+
+    **Un CoG está DENTRO de su cartón**, así que con los bultos opacos las esferas no se
+    ven. Al abrir el visor con marcadores, `palletize.py` apaga el grupo de los bultos
+    (`PACKAGE_GROUP`) y aquí se pintan en su lugar unas copias translúcidas. No se toca
+    el `rgba` del modelo: lo leen también las fotos y las cámaras de profundidad, y un
+    bulto translúcido sale distinto en la foto y puede desaparecer del mapa medido. Con
+    el grupo encendido —la tecla `1`— vuelven los bultos opacos y las copias sobran.
+
+    Va detrás de la rejilla del mapa de alturas en el mismo `user_scn`: la rejilla sólo
+    cambia al medir y ocupa las primeras `scene.heightmap_geoms` casillas, y esto se
+    repinta en cada fotograma porque los bultos se mueven. Sin marcadores no toca nada.
+    """
+    viewer = getattr(scene, "viewer", None)
+    if viewer is None or not draws_com(scene):
+        return
+    mujoco = scene.mujoco
+    model, data = scene.model, scene.data
+    scn = viewer.user_scn
+    scn.ngeom = int(getattr(scene, "heightmap_geoms", 0))
+    identity = np.eye(3, dtype=np.float64).reshape(9)
+
+    def next_geom():
+        if scn.ngeom >= scn.maxgeom:
+            return None
+        geom = scn.geoms[scn.ngeom]
+        scn.ngeom += 1
+        return geom
+
+    def sphere(position, radius: float, rgba, label: str = "") -> None:
+        geom = next_geom()
+        if geom is None:
+            return
+        mujoco.mjv_initGeom(
+            geom,
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=np.array([radius, 0.0, 0.0]),
+            pos=np.asarray(position, dtype=np.float64),
+            mat=identity,
+            rgba=np.array(rgba, dtype=np.float32),
+        )
+        geom.label = label
+
+    def line(start, end, width: float, rgba) -> None:
+        geom = next_geom()
+        if geom is None:
+            return
+        mujoco.mjv_initGeom(
+            geom,
+            type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+            size=np.zeros(3),
+            pos=np.zeros(3),
+            mat=identity,
+            rgba=np.array(rgba, dtype=np.float32),
+        )
+        mujoco.mjv_connector(
+            geom, mujoco.mjtGeom.mjGEOM_CAPSULE, width,
+            np.asarray(start, dtype=np.float64), np.asarray(end, dtype=np.float64),
+        )
+
+    opt = getattr(viewer, "opt", None)
+    if opt is not None and not opt.geomgroup[PACKAGE_GROUP]:
+        for box in scene.boxes:
+            index = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, box.geom)
+            geom = next_geom() if index >= 0 else None
+            if geom is None:
+                continue
+            rgba = np.array(model.geom_rgba[index], dtype=np.float32)
+            rgba[3] = min(float(rgba[3]), GHOST_ALPHA)
+            mujoco.mjv_initGeom(
+                geom,
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=np.array(model.geom_size[index], dtype=np.float64),
+                pos=np.array(data.geom_xpos[index], dtype=np.float64),
+                mat=np.array(data.geom_xmat[index], dtype=np.float64),
+                rgba=rgba,
+            )
+
+    show_true = bool(getattr(scene, "show_true_com", False))
+    show_estimated = bool(getattr(scene, "show_estimated_com", False))
+    true_points, true_masses = [], []
+    believed_points, believed_masses = [], []
+    for placement in getattr(scene, "load_placements", []):
+        body = scene.body_id(placement.box.index)
+        true_points.append(np.array(data.xipos[body], dtype=float))
+        true_masses.append(float(model.body_mass[body]))
+        rotation = np.asarray(data.xmat[body], dtype=float).reshape(3, 3)
+        offset = np.asarray(placement.spec.cog_offset_m, dtype=float)
+        believed_points.append(np.asarray(data.xpos[body], dtype=float) + rotation @ offset)
+        believed_masses.append(float(placement.spec.mass_kg))
+    if show_true:
+        for point in true_points:
+            sphere(point, PACKAGE_RADIUS, TRUE_COM_RGBA)
+    if show_estimated:
+        for point in believed_points:
+            sphere(point, PACKAGE_RADIUS, ESTIMATED_COM_RGBA)
+
+    # La plomada baja a la cubierta del palé, no al suelo, y sigue su inclinación:
+    # en el ensayo de estabilidad el palé se ladea y la plomada tiene que ladearse con él.
+    pallet = np.asarray(data.xmat[scene.pallet_body], dtype=float).reshape(3, 3)
+    deck = np.asarray(data.xpos[scene.pallet_body], dtype=float) + pallet[:, 2] * scene.deck_z
+    normal = pallet[:, 2]
+
+    def load(points, masses, rgba, label: str):
+        total = sum(masses)
+        if total <= 0.0:
+            return None
+        centre = sum(mass * point for mass, point in zip(masses, points)) / total
+        foot = centre - normal * float(np.dot(centre - deck, normal))
+        sphere(centre, LOAD_RADIUS, rgba, label)
+        line(foot, centre, PLUMB_WIDTH, rgba)
+        sphere(foot, PACKAGE_RADIUS * 0.8, rgba)
+        return centre
+
+    truth = load(true_points, true_masses, TRUE_COM_RGBA, "CoM real") if show_true else None
+    belief = (
+        load(believed_points, believed_masses, ESTIMATED_COM_RGBA, "CoM calculado")
+        if show_estimated else None
+    )
+    if truth is not None and belief is not None:
+        line(belief, truth, ERROR_WIDTH, ERROR_RGBA)
 
 
 def render(scene, view: str) -> np.ndarray:
