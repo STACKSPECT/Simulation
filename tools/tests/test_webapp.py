@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from stable_pallet import runner as runner_module
 from stable_pallet import webapp
@@ -22,6 +23,8 @@ from stable_pallet.webapp import (
     PalletizeClient,
     Session,
     _catalogue,
+    _child_argv,
+    _orientation_argv,
     _palletize_argv,
     _run_request,
     _Server,
@@ -97,7 +100,7 @@ def post(base: str, path: str, payload: dict[str, Any]) -> tuple[int, dict[str, 
 def test_the_catalogue_offers_the_declared_levels() -> None:
     """Listados a mano a propósito: derivarlos del YAML dejaría de ver un nivel perdido."""
     catalogue = _catalogue()
-    assert [item["key"] for item in catalogue] == [
+    assert [item["key"] for item in catalogue if item["kind"] == "level"] == [
         "level-11", "level-12", "level-13", "level-14", "level-15", "level-16",
         "level-17", "level-21", "level-22", "level-23", "level-31", "level-32",
         "level-33", "level-34", "level-41", "level-42", "level-43",
@@ -108,13 +111,42 @@ def test_the_catalogue_offers_the_declared_levels() -> None:
         assert isinstance(entry["usesRobot"], bool)
 
 
+def test_the_experiment_does_not_join_the_comparable_levels() -> None:
+    """La tarjeta del experimento se ofrece, pero NO entra en `levels`.
+
+    Las cargas de `configs/pallet.yaml` son comparables entre sí; una más que no está en
+    el YAML y que ni siquiera corre el mismo entrypoint las dejaría de serlo. Se cuentan
+    contra el YAML y no contra un número: eran catorce al escribir esto y los tres de
+    ajetreo ya lo dejaron viejo.
+    """
+    catalogue = _catalogue()
+    experiment = next(item for item in catalogue if item["key"] == "orient-by-com")
+    config = yaml.safe_load((webapp.REPO / "configs" / "pallet.yaml").read_text(encoding="utf-8"))
+
+    levels = [item for item in catalogue if item["kind"] == "level"]
+    assert [item["level"] for item in levels] == [int(row["id"]) for row in config["levels"]]
+    assert experiment["kind"] == "orientation"
+    assert experiment["entrypoint"] == "orient-by-com"
+    assert experiment["level"] is None
+    assert experiment["source"] == "experiment"
+    # Las tres capacidades que la página lee para apagar controles.
+    assert (experiment["telemetry"], experiment["comMarkers"], experiment["stabilityTest"]) == (
+        False, False, False,
+    )
+    assert all(item["entrypoint"] == "palletize" for item in catalogue if item["kind"] == "level")
+    assert all(item["telemetry"] for item in catalogue if item["kind"] == "level")
+
+
 def test_the_catalogue_says_where_the_cartons_come_from() -> None:
     """The card is tagged from this, which is the only sign a run starts at a trailer."""
     sources = {entry["key"]: entry["source"] for entry in _catalogue()}
     assert sources["level-11"] == "table"
     assert sources["level-21"] == "conveyor"
     assert sources["level-31"] == "truck"
-    assert set(sources.values()) == {"table", "conveyor", "truck"}
+    assert sources["orient-by-com"] == "experiment"
+    assert {source for key, source in sources.items() if key.startswith("level-")} == {
+        "table", "conveyor", "truck",
+    }
 
 
 def test_every_level_has_a_watchable_cell() -> None:
@@ -306,6 +338,7 @@ def test_the_selected_level_reaches_the_entrypoint(
     camión card onto `truck-unload`. The title changed; the scene did not."""
     request, title = _run_request({"experiment": key, "mode": mode, "seed": 1})
     assert request == {
+        "entrypoint": "palletize",
         "mode": mode,
         "source": source,
         "level": level,
@@ -408,6 +441,128 @@ def test_the_centre_of_mass_switches_start_off() -> None:
         tag = re.search(rf'<input[^>]*id="{name}"[^>]*>', page)
         assert tag is not None, name
         assert "checked" not in tag.group(0), tag.group(0)
+
+
+# -- el experimento de orientación por CoM --------------------------------------------
+
+
+def test_the_orientation_card_launches_its_own_entrypoint() -> None:
+    """No es un nivel: no lleva `--source` ni `--level`, y no llama a `palletize.py`."""
+    request, title = _run_request({"experiment": "orient-by-com", "mode": "debug", "seed": 3})
+    argv = _child_argv(request)
+
+    assert argv[1].endswith("scripts/orient_by_com.py")
+    assert not any(part.endswith("scripts/palletize.py") for part in argv)
+    assert "--source" not in argv and "--level" not in argv
+    assert argv[argv.index("--protocol") + 1] == "json"
+    assert argv[argv.index("--seed") + 1] == "3"
+    assert title == "DEPURACIÓN · Orientar el CoM hacia el apoyo"
+
+
+def test_execution_mode_is_refused_for_a_card_that_cannot_publish() -> None:
+    """EJECUCIÓN promete subir si hay credenciales; este experimento no tiene con qué.
+
+    Tragárselo y correrlo igual sería peor que el 400: el operador se quedaría mirando
+    la interfaz esperando un episodio que nadie abrió.
+    """
+    with pytest.raises(ValueError, match="DEPURACIÓN"):
+        _run_request({"experiment": "orient-by-com", "mode": "execution"})
+
+
+def test_the_http_gate_refuses_an_execution_of_the_experiment(served: Any, runner: type[FakeRunner]) -> None:
+    base, _ = served
+    status, body = post(base, "/api/run", {"experiment": "orient-by-com", "mode": "execution"})
+
+    assert status == 400
+    assert "DEPURACIÓN" in body["error"]
+    assert runner.instances == []
+
+
+def test_the_orientation_run_never_carries_flags_its_parser_lacks(served: Any, runner: type[FakeRunner]) -> None:
+    """Las casillas de la página no pueden colarle banderas que no existen.
+
+    `orient_by_com.py` no declara `--no-telemetry`, `--show-com` ni `--stability-test`:
+    cualquiera de las tres sería un `SystemExit` de argparse antes de la primera pose.
+    """
+    base, _ = served
+    status, _body = post(base, "/api/run", {
+        "experiment": "orient-by-com",
+        "mode": "debug",
+        "show_true_com": True,
+        "show_estimated_com": True,
+        "stability_test": True,
+    })
+    assert status == 200
+
+    request = runner.instances[-1].request
+    assert request["show_com"] is False
+    assert request["stability_test"] is False
+    argv = _child_argv(request)
+    for flag in ("--no-telemetry", "--show-com", "--stability-test"):
+        assert flag not in argv
+
+
+def test_the_experiment_keeps_the_flags_it_does_have() -> None:
+    """Visor, gráficos, velocidad y semilla sí llegan: son las banderas que declara."""
+    argv = _orientation_argv({
+        "viewer": True, "simplified_graphics": True, "speed": 2.0, "seed": 7,
+    })
+    assert "--viewer" in argv
+    assert "--simplified-graphics" in argv
+    assert argv[argv.index("--speed") + 1] == "2.0"
+    assert argv[argv.index("--seed") + 1] == "7"
+
+
+def test_fast_forward_reaches_the_experiment_as_speed_zero() -> None:
+    argv = _orientation_argv({"fast_forward": True, "speed": 4.0, "seed": None})
+    assert argv[argv.index("--speed") + 1] == "0"
+    assert "--seed" not in argv
+
+
+def test_a_level_still_goes_to_palletize_after_the_experiment_was_added() -> None:
+    """El despacho es por `entrypoint`, no por lo que traiga la petición de antes."""
+    request, _ = _run_request({"experiment": "level-33", "mode": "execution", "seed": 1})
+    argv = _child_argv(request)
+    assert argv[1].endswith("scripts/palletize.py")
+    assert argv == _palletize_argv(request)
+
+
+def test_every_flag_the_panel_sends_is_one_the_script_declares() -> None:
+    """La comprobación que evita el fallo que sólo se ve al arrancar el hijo.
+
+    Una bandera que el script no declara no es un aviso: es un `SystemExit` de argparse
+    con el panel enseñando un error en vez de un experimento. Se lee el fuente en vez de
+    importarlo porque importar `scripts/orient_by_com.py` arrastra MuJoCo, y esta suite
+    tiene que seguir corriendo en segundos.
+
+    La segunda mitad mira al revés a propósito: el día que el script gane `--show-com` o
+    `--stability-test`, lo que toca es encender su capacidad en `_catalogue`, no dejar
+    el control apagado en la página.
+    """
+    source = (Path(__file__).resolve().parents[2] / "scripts" / "orient_by_com.py").read_text(
+        encoding="utf-8"
+    )
+    declared = set(re.findall(r'add_argument\(\s*\n?\s*"(--[a-z-]+)"', source))
+
+    requests = [
+        {"viewer": True, "simplified_graphics": True, "speed": 1.0, "seed": 1},
+        {"viewer": False, "fast_forward": True, "speed": 4.0, "seed": None},
+    ]
+    sent = {part for request in requests for part in _orientation_argv(request) if part.startswith("--")}
+    assert sent <= declared, f"el panel manda banderas que el script no tiene: {sent - declared}"
+
+    assert {"--viewer", "--speed", "--seed", "--protocol", "--simplified-graphics"} <= declared
+    assert not {"--no-telemetry", "--show-com", "--stability-test"} & declared
+
+
+def test_the_page_offers_the_experiment_group_and_its_notes(served: Any) -> None:
+    """Sin el grupo en la página, la tarjeta llegaría del servidor y no se dibujaría."""
+    base, _ = served
+    script = get(base, "/app.js")[1].decode()
+    page = get(base, "/")[1].decode()
+
+    assert '"experiment", "Experimentos"' in script
+    assert 'id="com-note"' in page and 'id="startup-note"' in page
 
 
 def test_an_unknown_experiment_is_refused(served: Any) -> None:

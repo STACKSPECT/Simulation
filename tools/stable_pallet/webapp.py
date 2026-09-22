@@ -6,11 +6,14 @@ reports over a one-way pipe, so nothing can be changed once it is running. The t
 bar and the live switches of the old local runner are disabled in the page for that
 reason -- see the `disabled` marks in `web/index.html`.
 
-Three processes, each with one job. Both modes launch the migrated entrypoint with the
-selected source and level. Execution may upload; debugging always passes
-`--no-telemetry` and never opens a remote episode:
+Three processes, each with one job. A level card launches the migrated entrypoint with
+the selected source and level: execution may upload, debugging always passes
+`--no-telemetry` and never opens a remote episode. The CoM-orientation card launches a
+different script -- `scripts/orient_by_com.py`, which has no telemetry at all -- so the
+picker offers it in its own group and only in DEPURACIÓN:
 
     browser  <--HTTP/SSE-->  this server  <--JSON over pipes-->  scripts/palletize.py
+                                                                 scripts/orient_by_com.py
 
 Nothing in this module touches MuJoCo. Of the control messages the page can send only
 `cancel` means anything -- it stops the child -- and everything the child reports is
@@ -62,29 +65,75 @@ def _idle_state() -> dict[str, Any]:
 
 
 def _catalogue() -> list[dict[str, Any]]:
-    """Los niveles declarados en YAML, agrupables por fuente."""
+    """Las cargas que el panel ofrece: los niveles del YAML y los experimentos sueltos.
+
+    Los niveles salen de `levels` y son las catorce cargas comparables. El experimento
+    de orientación por CoM NO es uno de ellos —no está en `levels`, no altera esa
+    comparación— y por eso entra aparte, con `source: "experiment"`, que es lo que la
+    página usa para sacarlo a su propio grupo en vez de mezclarlo con los de mesa.
+
+    Las tres banderas de capacidad (`telemetry`, `comMarkers`, `stabilityTest`) dicen
+    qué controles tiene sentido dejar encendidos: la página los apaga y escribe al lado
+    por qué, que es la regla de `AGENTS.md` §9.9 —un control inerte cuesta más de
+    depurar que uno que no está—. Aquí se declaran, y `_run_request` los hace cumplir.
+    """
     config = yaml.safe_load((REPO / "configs" / "pallet.yaml").read_text(encoding="utf-8"))
     descriptions = {
         "table": "Bultos preparados en mesa.",
         "conveyor": "Banda física que entrega y se detiene.",
         "truck": "Descarga del remolque de arriba abajo.",
     }
-    return [
+    catalogue: list[dict[str, Any]] = [
         {
             "key": f"level-{row['id']}",
             "title": row["name"],
             "description": descriptions[row["source"]],
             "kind": "level",
+            "entrypoint": "palletize",
             "source": row["source"],
             "level": int(row["id"]),
             "watchable": True,
             "usesRobot": True,
             "shake": False,
             "instantPlace": False,
+            "telemetry": True,
+            "comMarkers": True,
+            "stabilityTest": True,
             "seed": 1,
         }
         for row in config["levels"]
     ]
+    # El recuento sale del YAML para que la tarjeta no se quede diciendo «cuatro cubos»
+    # el día que alguien añada el quinto.
+    cubes = len(config["com_orientation_experiment"]["boxes"])
+    catalogue.append(
+        {
+            "key": "orient-by-com",
+            "title": "Orientar el CoM hacia el apoyo",
+            "description": (
+                f"{cubes} cubos: se pesan en la muñeca, se tumban en la mesa auxiliar "
+                "con la cara lateral más próxima al CoM abajo y se llevan al palé."
+            ),
+            "kind": "orientation",
+            "entrypoint": "orient-by-com",
+            "source": "experiment",
+            "level": None,
+            "watchable": True,
+            "usesRobot": True,
+            "shake": False,
+            "instantPlace": False,
+            # `scripts/orient_by_com.py` no abre episodio: no tiene `--no-telemetry`
+            # que pasarle ni nada que subir, así que EJECUCIÓN no significa nada aquí.
+            "telemetry": False,
+            # Tampoco tiene banderas de centro de masa —`--show-com`, `--show-true-com`,
+            # `--show-estimated-com`— ni `--stability-test`; pasárselas sería un error
+            # de argparse, y dejarlas encendidas, un control inerte.
+            "comMarkers": False,
+            "stabilityTest": False,
+            "seed": 1,
+        }
+    )
+    return catalogue
 
 
 def _palletize_argv(request: dict[str, Any]) -> list[str]:
@@ -122,6 +171,43 @@ def _palletize_argv(request: dict[str, Any]) -> list[str]:
     if request.get("seed") is not None:
         argv.extend(("--seed", str(int(request["seed"]))))
     return argv
+
+
+def _orientation_argv(request: dict[str, Any]) -> list[str]:
+    """La línea de `scripts/orient_by_com.py`, que NO es el paletizado.
+
+    Lleva sólo las banderas que ese script declara: visor, velocidad, gráficos y
+    semilla. `--no-telemetry` no aparece porque tampoco existe —el experimento no abre
+    episodio ni conoce la plataforma—, y ni las tres banderas de centro de masa ni
+    `--stability-test` aparecen porque no las tiene: pasarlas sería un `SystemExit` de
+    argparse al arrancar, con el panel enseñando un error donde debería haber un
+    experimento.
+    """
+    python = REPO / ".venv" / "bin" / "python"
+    argv = [
+        interpreter(bool(request.get("viewer")), python if python.exists() else None),
+        str(REPO / "scripts" / "orient_by_com.py"),
+        "--protocol", "json",
+    ]
+    if request.get("viewer"):
+        argv.append("--viewer")
+    if request.get("simplified_graphics"):
+        argv.append("--simplified-graphics")
+    argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
+    if request.get("seed") is not None:
+        argv.extend(("--seed", str(int(request["seed"]))))
+    return argv
+
+
+def _child_argv(request: dict[str, Any]) -> list[str]:
+    """El proceso hijo que toca, según la tarjeta elegida.
+
+    `entrypoint` viaja en la petición, no se deduce de `source` ni de `level`: un
+    experimento nuevo añade una rama aquí y una fila en `_catalogue`, y nada más.
+    """
+    if request.get("entrypoint") == "orient-by-com":
+        return _orientation_argv(request)
+    return _palletize_argv(request)
 
 
 def unwind_child(process: subprocess.Popen[Any], timeout: float = 5.0) -> None:
@@ -162,7 +248,7 @@ class PalletizeClient:
     ) -> None:
         # `argv` es la costura de los tests: inyecta un hijo falso sin tocar la petición.
         if argv is None:
-            argv = _palletize_argv(request)
+            argv = _child_argv(request)
         self.on_message = on_message
         self.process = subprocess.Popen(
             argv, cwd=REPO, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -297,6 +383,13 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     marcadores en el visor; cualquiera de las dos enciende además `--show-com`, que
     añade el CoG final del palé al informe. El ensayo de estabilidad va en los dos
     modos y se anuncia en el título, que es lo único que distingue un run con ensayo.
+
+    Una tarjeta sin telemetría —hoy sólo el experimento de orientación— RECHAZA
+    EJECUCIÓN en vez de tragársela: ese modo promete que se sube si hay credenciales, y
+    `scripts/orient_by_com.py` no tiene con qué cumplirlo. La página además apaga el
+    botón, pero la puerta HTTP se puede llamar a mano y es aquí donde se cierra. Por lo
+    mismo, las casillas que ese script no sabe leer se filtran contra la capacidad de la
+    tarjeta y no contra lo que marcó la página.
     """
     item = next((entry for entry in _catalogue() if entry["key"] == payload.get("experiment")), None)
     if item is None:
@@ -304,8 +397,14 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
     mode = str(payload.get("mode", "execution"))
     if mode not in {"execution", "debug"}:
         raise ValueError(f"Modo desconocido: {mode!r}")
+    if mode == "execution" and not item["telemetry"]:
+        raise ValueError(
+            f"{item['title']} no publica telemetría: córrelo en DEPURACIÓN."
+        )
     viewer = bool(payload.get("viewer")) and item["watchable"]
+    wants_com = bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com"))
     request = {
+        "entrypoint": item["entrypoint"],
         "mode": mode,
         "source": item["source"],
         "level": item["level"],
@@ -313,10 +412,10 @@ def _run_request(payload: dict[str, Any]) -> tuple[dict[str, Any], str]:
         "speed": float(payload.get("speed", 1.0)),
         "fast_forward": bool(payload.get("fast_forward")),
         "simplified_graphics": bool(payload.get("simplified_graphics")),
-        "show_com": bool(payload.get("show_true_com")) or bool(payload.get("show_estimated_com")),
-        "show_true_com": bool(payload.get("show_true_com")),
-        "show_estimated_com": bool(payload.get("show_estimated_com")),
-        "stability_test": bool(payload.get("stability_test")),
+        "show_com": wants_com and item["comMarkers"],
+        "show_true_com": bool(payload.get("show_true_com")) and item["comMarkers"],
+        "show_estimated_com": bool(payload.get("show_estimated_com")) and item["comMarkers"],
+        "stability_test": bool(payload.get("stability_test")) and item["stabilityTest"],
         "seed": payload.get("seed"),
     }
     title = f"{'EJECUCIÓN' if mode == 'execution' else 'DEPURACIÓN'} · {item['title']}"

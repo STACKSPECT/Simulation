@@ -376,6 +376,9 @@ main {
 .tag-3d, .tag-robot { color: var(--text-2); }
 .tag-shake { color: var(--warn); background: var(--warn-fill); }
 .tag-truck { color: var(--text-2); background: var(--neutral-fill); }
+/* Lo que no es uno de los catorce niveles comparables se lee distinto de un vistazo. */
+.tag-experiment { color: var(--text-2); background: var(--neutral-fill); }
+.tag-no-upload { color: var(--warn); background: var(--warn-fill); }
 
 main.busy .card { cursor: not-allowed; opacity: .5; }
 main.busy .card.on { opacity: 1; }

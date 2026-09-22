@@ -254,6 +254,43 @@ packages:
     friction: [0.95, 0.01, 0.001]
     rgba: [0.64, 0.43, 0.23, 1]
 
+# Experimento LOCAL y separado de `levels`: no altera las catorce cargas comparables y
+# no sube telemetría. El panel lo ofrece en su propio grupo y sólo en DEPURACIÓN, que
+# es lo que lo mantiene fuera de esa comparación sin esconderlo. Cuatro cubos pasan por
+# la mesa auxiliar para apoyar la cara lateral más próxima al CoM medido antes de ir al
+# palé.
+#
+# 300 mm de arista no es decorativo. Al tumbar el cubo, el lado largo del VGP20 queda
+# vertical: sus 264 mm dejan 18 mm libres hasta la mesa por arriba y por abajo. Con una
+# caja de 260 mm la herramienta intersectaría la mesa aunque el paquete estuviera bien
+# apoyado. El centro de la auxiliar y sus dos cotas ya estaban dentro del barrido de IK;
+# esta maniobra añade las cuatro orientaciones laterales y las ancla en `test_cell.py`.
+#
+# Los offsets dominantes de 45 mm son un 30 % del semieje. Se mantienen dentro del
+# cartón y quedan muy por encima del error planar medido del gauge (<3 mm), de modo que
+# el signo de la cara no depende del ruido de una ejecución. Z varía, pero la lectura a
+# plomo no lo observa y el experimento NO lo usa para elegir cara.
+com_orientation_experiment:
+  cube_edge_m: 0.30
+  mass_kg: 4.5
+  friction: [0.95, 0.01, 0.001]
+  reorientation_clearance_m: 0.18
+  # La tapa original mira a -Y y el VGP20 queda entre la auxiliar y el pedestal. Con
+  # -X el solver daba pose, pero el brazo superior rozaba el pedestal 0,7 mm y el servo
+  # se quedaba 65 mm alto al soltar. Barrido físico de las cuatro direcciones: sólo -Y
+  # sostuvo el waypoint bajo con movimiento interpolado (residual 1,9 mm).
+  top_outward_world: [0.0, -1.0, 0.0]
+  pallet_slots_xy:
+    - [0.38, -0.18]
+    - [0.82, -0.18]
+    - [0.38,  0.18]
+    - [0.82,  0.18]
+  boxes:
+    - {name: com_x_pos, cog_offset_m: [ 0.045,  0.012, -0.015], rgba: [0.76, 0.42, 0.24, 1]}
+    - {name: com_x_neg, cog_offset_m: [-0.045, -0.010, -0.010], rgba: [0.25, 0.55, 0.78, 1]}
+    - {name: com_y_pos, cog_offset_m: [ 0.010,  0.045, -0.020], rgba: [0.38, 0.68, 0.42, 1]}
+    - {name: com_y_neg, cog_offset_m: [-0.012, -0.045, -0.005], rgba: [0.68, 0.43, 0.72, 1]}
+
 # El sobre del que se sortea cuando un nivel pide `random`. La masa NO se sortea: es
 # densidad × volumen, que es lo que hace que un bulto grande y ligero y otro pequeño y
 # denso sean problemas distintos.

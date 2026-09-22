@@ -283,6 +283,25 @@ out exact, the vertical is anchored to the geometric centre because nothing down
 it — and `--precise-com` sweeps several poses when that is not enough. The method and its five
 preconditions are in **[`pesaje-en-el-sitio.md`](pesaje-en-el-sitio.md)**.
 
+There is also a **separate, local CoM-orientation experiment**. Four 300 mm cubes carry
+different lateral centres of mass. The robot weighs each cube, lays it on the auxiliary table
+with the measured-nearest side down, releases it, picks it again from above and moves it to a
+fixed first-layer pallet slot:
+
+```bash
+python scripts/orient_by_com.py --viewer
+python scripts/orient_by_com.py --simplified-graphics  # headless fast-forward
+```
+
+This is deliberately not level `18`: it does not change the fourteen comparable palletizing
+loads and does not publish telemetry. The [control panel](#the-control-panel) does offer it,
+in a group of its own and only in *Depuración* — staying out of `levels` is what protects the
+comparison; staying out of the picker only made it hard to run. Box pose is still
+provided by the oracle detector because perception is outside this experiment; mass and CoM
+come from the real wrist gauge. The plumb reading observes X/Y, so the decision is explicitly
+between the four lateral faces rather than pretending the unobserved vertical component is
+known. The complete two-pick cycle is in [`src/com_orientation.py`](src/com_orientation.py).
+
 <div align="center">
   <img src="docs/img/cell-overview.png" alt="The full cell from behind the robot: the UR10e on its pedestal holding a box in the suction gripper, the open truck trailer with staged boxes to the left, an empty europallet to the right, yellow racking uprights around it" width="900">
 </div>
@@ -311,8 +330,9 @@ uv run stable-pallet dashboard          # prints: Panel en http://127.0.0.1:8000
 
 | Control | What it does |
 |---|---|
-| **Experiment picker** | The fourteen levels, read straight from `configs/pallet.yaml`, grouped by source. Add a level to the YAML and the card appears |
-| **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused |
+| **Experiment picker** | The fourteen levels, read straight from `configs/pallet.yaml`, grouped by source. Add a level to the YAML and the card appears. A last group, *Experimentos*, holds what is deliberately not one of those comparable loads — today the [CoM-orientation run](#the-cell), which launches `scripts/orient_by_com.py` instead |
+| **Mode** | *Ejecución* runs `scripts/palletize.py` and publishes if credentials exist. *Depuración* runs the local runner, never opens an episode, never uploads — the header reads `DEPURACIÓN · SIN TELEMETRÍA` so the two cannot be confused. A card with no telemetry of its own drops the switch to *Depuración* and the server refuses *Ejecución* outright, rather than running it and leaving you waiting for an episode nobody opened |
+| **Controls a card cannot use** | Each card declares what its entrypoint supports. The CoM-orientation script has no `--show-com` and no `--stability-test`, so those switches go dark with the reason written next to them — a control that does nothing costs more to debug than one that is not there |
 | **Speed / fast-forward** | ×0,5 to *máx*, changeable mid-run; the toggle switches the two arm modes measured [above](#results) |
 | **Playback** | Pause, scrub, step either way, play backwards. The run waits where it was and continues from there |
 | **Start-up** | 3D window, weigh each box, simplified graphics, hold the viewer open, seed override |
@@ -333,7 +353,8 @@ real components against oracle stubs, so only it can compute a run's `oracle` fl
 ## Usage
 
 `scripts/palletize.py` is the cell entry point. Weight training has its own
-`scripts/train_weights.py` entry point described above.
+`scripts/train_weights.py` entry point, and the separate CoM-orientation experiment
+uses `scripts/orient_by_com.py`; both are described above.
 
 | Flag | Effect |
 |---|---|
@@ -434,13 +455,14 @@ The loop runs end to end on all three sources today. What does not:
 
 | Piece | State | Detail |
 |---|---|---|
-| Cell, arm, vacuum, three sources | ✅ | `tests/test_cell.py`, 17 physical checks |
+| Cell, arm, vacuum, three sources | ✅ | `tests/test_cell.py`, 18 physical checks |
 | Wrist gauge | ✅ | Mass and planar CoM recovered |
+| Separate CoM-orientation experiment | ✅ | 4/4 cubes in fast-forward and interpolated motion; measured-nearest lateral face down |
 | Beam search planner | ✅ | The planner the [results](#results) were measured with. Opt-in behind `--beam-planner` |
 | Scoring heuristic | ✅ | What the CLI still constructs when no planner flag is given. 15 checks, no simulator |
 | Weight trainer | ✅ | Robot-free CEM policy search; physical box settling and all 17 stability trials, with durable JSON/JSONL traces |
 | Measurement + live telemetry | ✅ | Rows verified against the schema |
-| Control panel | ✅ | Both modes, fourteen levels |
+| Control panel | ✅ | Both modes, fourteen levels and the CoM-orientation experiment |
 | Height map from cameras | 🟡 | Runs, not at parity: level 11 seed 1 places 3/4 against the oracle's 4/4, ending in `wrong_placement`. Hence `allow_unobserved: true` — coverage over an empty pallet measures 93.3 %, not the 98 % that would justify `false` |
 | Table levels `16`–`17` | 🟡 | Deliberately out of reach: no planner clears them, and they exist as a bench for a learned one |
 | **Perception** (`vision/detect.py`) | ❌ | The **only** `NotImplementedError` in the repo |
@@ -471,11 +493,11 @@ expect them to have moved up.
 | | Command | Proves | Result |
 |---|---|---|---|
 | 0 | `python -m placing` | The heuristic alone; first check is the import boundary | `15 checks passed` |
-| 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `30 comprobaciones pasadas` |
+| 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `32 comprobaciones pasadas` |
 | 2 | `python -m src.measure` | CoG with out-of-tolerance boxes, margin against the support polygon | `ok measure.demo` |
-| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `20 comprobaciones físicas pasadas` |
+| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training and CoM reorientation | `21 comprobaciones físicas pasadas` |
 | 4 | `python scripts/palletize.py -n 1 --no-telemetry --level 21` | A whole episode to disk | `4/4 · ÉXITO` |
-| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `209 passed` |
+| 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `219 passed` |
 
 > Rung 5 was red on `c8d84ac`: two `tools/tests/test_webapp.py` assertions still demanded a
 > nine-level catalogue while `configs/pallet.yaml` had grown past it. The level `34` commit
