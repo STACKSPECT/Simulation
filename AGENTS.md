@@ -485,10 +485,10 @@ que protege la comparación; esconderlo del selector sólo lo hacía difícil de
 tarjeta va en un grupo propio —`Experimentos`, el último—, nunca entre las de mesa, y
 `_catalogue` la marca con tres capacidades que la página lee para apagar controles:
 
-| capacidad | hoy | qué apaga |
+| capacidad | hoy | qué apaga si es `false` |
 |---|---|---|
 | `telemetry` | `false` | EJECUCIÓN. Ese modo promete subir si hay credenciales y aquí no hay nada que subir |
-| `comMarkers` | `false` | los dos interruptores de centro de masa: el script no tiene `--show-com`, `--show-true-com` ni `--show-estimated-com` |
+| `comMarkers` | `true` | los dos interruptores de centro de masa. El script tiene `--show-true-com` y `--show-estimated-com` y pinta los mismos marcadores que el paletizado; `--show-com` no, porque no hay CoG final del palé que añadir al informe, y no se le manda |
 | `stabilityTest` | `false` | el ensayo: no tiene `--stability-test`, y cuatro cubos en huecos fijos no son una pila |
 
 Las tres se hacen cumplir **en el servidor**, en `_run_request`, no sólo en la página: la
@@ -499,9 +499,9 @@ capacidad de la tarjeta, no contra lo que marcó la página. **Una bandera que e
 declara no es un aviso: es un `SystemExit` de argparse** antes de la primera pose, con el
 panel enseñando un error donde debería haber un experimento. Lo ancla
 `test_every_flag_the_panel_sends_is_one_the_script_declares`, que lee el fuente del script
-en vez de importarlo para no arrastrar MuJoCo a esa suite. Si algún día gana `--show-com`
-o `--stability-test`, lo que toca es encender su capacidad en `_catalogue`, no dejar el
-control apagado.
+en vez de importarlo para no arrastrar MuJoCo a esa suite. Así se encendieron los
+marcadores de CoM: el script ganó las dos banderas y la capacidad pasó a `true`. Si algún
+día gana `--stability-test`, lo que toca es lo mismo, no dejar el control apagado.
 
 Y para que el panel pueda leerlo, el script habla el mismo protocolo que el paletizado:
 `--protocol json` emite `log` y un `finished` final. En texto no cambia nada.

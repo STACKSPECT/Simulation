@@ -45,9 +45,11 @@ Una tarjeta más, en el grupo **Experimentos**, lanza `scripts/orient_by_com.py`
 uno de los catorce niveles comparables y no está en `levels`, que es justo lo que lo
 mantiene fuera de esa comparación. Ese script no abre episodio, así que la tarjeta va
 marcada sin telemetría: el modo cae solo a DEPURACIÓN, EJECUCIÓN queda apagada y el
-servidor la rechaza con un 400 si alguien llama a `/api/run` a mano. Las casillas que
-ese entrypoint no declara —`--show-com`, `--stability-test`— se apagan con ella
-elegida, porque mandárselas sería un `SystemExit` de argparse antes de la primera pose.
+servidor la rechaza con un 400 si alguien llama a `/api/run` a mano. Las dos casillas
+de centro de masa sí funcionan: el script tiene `--show-true-com` y
+`--show-estimated-com`. Lo que ese entrypoint no declara —`--show-com`,
+`--stability-test`— no se le manda, y el ensayo se apaga con la tarjeta elegida, porque
+mandárselo sería un `SystemExit` de argparse antes de la primera pose.
 
 Las tarjetas van en cuatro grupos plegables —mesa, cinta, camión y experimentos—, y el conmutador de la
 cabecera alterna entre cuadrícula (la de partida: casi todo el catálogo de un vistazo,

@@ -131,7 +131,7 @@ def test_the_experiment_does_not_join_the_comparable_levels() -> None:
     assert experiment["source"] == "experiment"
     # Las tres capacidades que la página lee para apagar controles.
     assert (experiment["telemetry"], experiment["comMarkers"], experiment["stabilityTest"]) == (
-        False, False, False,
+        False, True, False,
     )
     assert all(item["entrypoint"] == "palletize" for item in catalogue if item["kind"] == "level")
     assert all(item["telemetry"] for item in catalogue if item["kind"] == "level")
@@ -483,6 +483,7 @@ def test_the_orientation_run_never_carries_flags_its_parser_lacks(served: Any, r
 
     `orient_by_com.py` no declara `--no-telemetry`, `--show-com` ni `--stability-test`:
     cualquiera de las tres sería un `SystemExit` de argparse antes de la primera pose.
+    Los dos marcadores de centro de masa sí los declara, y ésos tienen que llegar.
     """
     base, _ = served
     status, _body = post(base, "/api/run", {
@@ -495,11 +496,11 @@ def test_the_orientation_run_never_carries_flags_its_parser_lacks(served: Any, r
     assert status == 200
 
     request = runner.instances[-1].request
-    assert request["show_com"] is False
     assert request["stability_test"] is False
     argv = _child_argv(request)
     for flag in ("--no-telemetry", "--show-com", "--stability-test"):
         assert flag not in argv
+    assert "--show-true-com" in argv and "--show-estimated-com" in argv
 
 
 def test_the_experiment_keeps_the_flags_it_does_have() -> None:
@@ -545,13 +546,15 @@ def test_every_flag_the_panel_sends_is_one_the_script_declares() -> None:
     declared = set(re.findall(r'add_argument\(\s*\n?\s*"(--[a-z-]+)"', source))
 
     requests = [
-        {"viewer": True, "simplified_graphics": True, "speed": 1.0, "seed": 1},
+        {"viewer": True, "simplified_graphics": True, "speed": 1.0, "seed": 1,
+         "show_true_com": True, "show_estimated_com": True},
         {"viewer": False, "fast_forward": True, "speed": 4.0, "seed": None},
     ]
     sent = {part for request in requests for part in _orientation_argv(request) if part.startswith("--")}
     assert sent <= declared, f"el panel manda banderas que el script no tiene: {sent - declared}"
 
-    assert {"--viewer", "--speed", "--seed", "--protocol", "--simplified-graphics"} <= declared
+    assert {"--viewer", "--speed", "--seed", "--protocol", "--simplified-graphics",
+            "--show-true-com", "--show-estimated-com"} <= declared
     assert not {"--no-telemetry", "--show-com", "--stability-test"} & declared
 
 

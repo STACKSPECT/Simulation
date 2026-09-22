@@ -125,10 +125,10 @@ def _catalogue() -> list[dict[str, Any]]:
             # `scripts/orient_by_com.py` no abre episodio: no tiene `--no-telemetry`
             # que pasarle ni nada que subir, así que EJECUCIÓN no significa nada aquí.
             "telemetry": False,
-            # Tampoco tiene banderas de centro de masa —`--show-com`, `--show-true-com`,
-            # `--show-estimated-com`— ni `--stability-test`; pasárselas sería un error
-            # de argparse, y dejarlas encendidas, un control inerte.
-            "comMarkers": False,
+            # Pinta los mismos marcadores que el paletizado: `--show-true-com` y
+            # `--show-estimated-com` sí los tiene. `--show-com` y `--stability-test`
+            # no, y `_orientation_argv` no se los manda: serían un error de argparse.
+            "comMarkers": True,
             "stabilityTest": False,
             "seed": 1,
         }
@@ -176,12 +176,12 @@ def _palletize_argv(request: dict[str, Any]) -> list[str]:
 def _orientation_argv(request: dict[str, Any]) -> list[str]:
     """La línea de `scripts/orient_by_com.py`, que NO es el paletizado.
 
-    Lleva sólo las banderas que ese script declara: visor, velocidad, gráficos y
-    semilla. `--no-telemetry` no aparece porque tampoco existe —el experimento no abre
-    episodio ni conoce la plataforma—, y ni las tres banderas de centro de masa ni
-    `--stability-test` aparecen porque no las tiene: pasarlas sería un `SystemExit` de
-    argparse al arrancar, con el panel enseñando un error donde debería haber un
-    experimento.
+    Lleva sólo las banderas que ese script declara: visor, velocidad, gráficos, semilla
+    y los dos marcadores de centro de masa. `--no-telemetry` no aparece porque tampoco
+    existe —el experimento no abre episodio ni conoce la plataforma—, y ni `--show-com`
+    —el CoG final del informe, que aquí no hay— ni `--stability-test` aparecen porque no
+    los tiene: pasarlos sería un `SystemExit` de argparse al arrancar, con el panel
+    enseñando un error donde debería haber un experimento.
     """
     python = REPO / ".venv" / "bin" / "python"
     argv = [
@@ -193,6 +193,10 @@ def _orientation_argv(request: dict[str, Any]) -> list[str]:
         argv.append("--viewer")
     if request.get("simplified_graphics"):
         argv.append("--simplified-graphics")
+    if request.get("show_true_com"):
+        argv.append("--show-true-com")
+    if request.get("show_estimated_com"):
+        argv.append("--show-estimated-com")
     argv.extend(("--speed", "0" if request.get("fast_forward") else str(request["speed"])))
     if request.get("seed") is not None:
         argv.extend(("--seed", str(int(request["seed"]))))

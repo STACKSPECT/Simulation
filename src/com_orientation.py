@@ -61,6 +61,14 @@ class _StationSupply(TableSupply):
 
 
 @dataclass(frozen=True)
+class _OnPallet:
+    """Un cubo ya en el palé, con lo que midió la muñeca: lo que pinta el visor."""
+
+    box: Box
+    spec: PackageSpec
+
+
+@dataclass(frozen=True)
 class SupportFace:
     """Cara lateral elegida en el frame original del cubo."""
 
@@ -213,6 +221,11 @@ def run_orientation_experiment(scene: PalletScene, detector: Detector, gauge: Ga
     experiment = scene.cfg["com_orientation_experiment"]
     slots = experiment["pallet_slots_xy"]
     result = OrientationExperiment(n_objects=len(scene.boxes))
+    # Lo mismo que anota `src/episode.py` para los marcadores de CoM del visor —ver
+    # `render.draw_overlay`—: lo que midió la muñeca de cada cubo y los que ya están en
+    # el palé. El CoM calculado viaja con el cubo al tumbarlo, porque va en su marco.
+    scene.weighed_specs = {}
+    scene.load_placements = []
     try:
         for index, box in enumerate(scene.boxes):
             package_id = supply.present(scene)
@@ -229,6 +242,7 @@ def run_orientation_experiment(scene: PalletScene, detector: Detector, gauge: Ga
 
             _pick_from_source(arm, scene, box, observation)
             spec = gauge.measure(scene, arm, observation)
+            scene.weighed_specs[box.index] = spec
             face = nearest_lateral_face(spec)
             desired_rotation = support_rotation(
                 face, experiment.get("top_outward_world", (0.0, -1.0, 0.0))
@@ -237,6 +251,7 @@ def run_orientation_experiment(scene: PalletScene, detector: Detector, gauge: Ga
             _regrasp_from_above(scene, arm, box, face)
             supply.release(scene)
             _place_on_pallet(scene, arm, box, slots[index])
+            scene.load_placements.append(_OnPallet(box, spec))
 
             position, quaternion = scene.box_pose(box.index)
             actual_rotation = _quat_to_matrix(scene, quaternion)

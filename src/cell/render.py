@@ -166,6 +166,20 @@ def draws_com(scene) -> bool:
                 or getattr(scene, "show_estimated_com", False))
 
 
+def show_com_markers(scene, viewer, *, true_com: bool, estimated_com: bool) -> None:
+    """Enciende los marcadores de CoM en un visor recién abierto.
+
+    Un CoG está dentro de su cartón: con los bultos opacos las esferas no se ven. Se
+    apaga su grupo UNA vez y `draw_overlay` los pinta translúcidos; el `1` los devuelve
+    opacos. Forzarlo en cada fotograma dejaría la tecla muerta.
+    """
+    scene.show_true_com = true_com
+    scene.show_estimated_com = estimated_com
+    if draws_com(scene):
+        with viewer.lock():
+            viewer.opt.geomgroup[PACKAGE_GROUP] = 0
+
+
 def draw_overlay(scene) -> None:
     """Pinta los centros de masa, y los bultos en fantasma para verlos.
 

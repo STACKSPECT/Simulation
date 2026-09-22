@@ -724,7 +724,36 @@ def test_robot_orients_four_cubes_with_their_cog_towards_the_support() -> None:
             assert support_world @ np.array([0.0, 0.0, -1.0]) > math.cos(math.radians(3))
             assert np.linalg.norm(position[:2] - np.asarray(slot)) < 0.01
             assert abs(position[2] - box.dims_m[2] / 2 - scene.deck_z) < 0.006
+
+        # Los marcadores del visor: los cuatro pesados y los cuatro en el palé. El CoM
+        # calculado va en el marco del cubo, así que tiene que haber viajado con él al
+        # tumbarlo: del real sólo lo separa la vertical que la muñeca a plomo no mide.
+        import mujoco
+
+        assert len(scene.weighed_specs) == len(scene.load_placements) == 4
+        scene.viewer = SimpleNamespace(
+            user_scn=mujoco.MjvScene(scene.model, maxgeom=500), opt=mujoco.MjvOption(),
+        )
+        scene.show_true_com = scene.show_estimated_com = True
+        draw_overlay(scene)
+        scn = scene.viewer.user_scn
+        geoms = [scn.geoms[i] for i in range(scn.ngeom)]
+
+        def centres(rgba, radius):
+            return [np.array(g.pos) for g in geoms
+                    if g.type == mujoco.mjtGeom.mjGEOM_SPHERE
+                    and np.allclose(g.rgba, rgba, atol=1e-3)
+                    and np.isclose(g.size[0], radius)]
+
+        true_points = centres(TRUE_COM_RGBA, PACKAGE_RADIUS)
+        believed = centres(ESTIMATED_COM_RGBA, PACKAGE_RADIUS)
+        assert len(true_points) == len(believed) == 4
+        for point in believed:
+            assert min(np.linalg.norm(point - other) for other in true_points) < 0.025
+        assert len(centres(TRUE_LOAD_RGBA, LOAD_RADIUS)) == 1
+        assert len(centres(ESTIMATED_LOAD_RGBA, LOAD_RADIUS)) == 1
     finally:
+        scene.viewer = None
         scene.close()
 
 

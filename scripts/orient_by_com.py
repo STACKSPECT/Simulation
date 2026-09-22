@@ -20,6 +20,7 @@ from src.com_orientation import (  # noqa: E402
     build_orientation_scene,
     run_orientation_experiment,
 )
+from src.cell.render import show_com_markers  # noqa: E402
 from src.vision.gauge import WristGauge  # noqa: E402
 from src.vision.oracle import OracleDetector  # noqa: E402
 
@@ -37,6 +38,14 @@ def parser() -> argparse.ArgumentParser:
         help="mide el CoM con el barrido de muñeca de cuatro poses",
     )
     cli.add_argument("--simplified-graphics", action="store_true")
+    # Los mismos marcadores que el paletizado, y con las mismas banderas: el panel manda
+    # las dos casillas igual a los dos scripts. `--show-com` NO, porque aquí no hay CoG
+    # final del palé que añadir al informe.
+    cli.add_argument("--show-true-com", action="store_true",
+                     help="con visor, pinta en verde los CoM reales, los que integra MuJoCo")
+    cli.add_argument("--show-estimated-com", action="store_true",
+                     help="con visor, pinta en naranja los CoM que mide la muñeca; con los "
+                          "dos, la línea amarilla es el error")
     # El mismo protocolo de líneas que `palletize.py`: es lo que el panel sabe leer.
     cli.add_argument("--protocol", choices=("text", "json"), default="text")
     return cli
@@ -91,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             import mujoco.viewer
 
             with mujoco.viewer.launch_passive(scene.model, scene.data) as viewer:
+                show_com_markers(scene, viewer, true_com=args.show_true_com,
+                                 estimated_com=args.show_estimated_com)
                 scene.viewer = viewer
                 try:
                     result = execute()
