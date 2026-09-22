@@ -66,6 +66,16 @@ PACKAGE_CONTACT = 1
 ARM_CONTACT = 2
 SOLID = 3                       # sólido para los dos
 
+# Grupo de visualización de los paquetes, y por tanto el atajo del visor que los esconde:
+# MuJoCo enciende y apaga el grupo N de geoms con la tecla N (0-5), así que `1` quita
+# los bultos y deja ver lo que tapan, como la rejilla del mapa de alturas (`m`). No hace
+# falta `key_callback`: si `palletize.py` atendiera también el `1`, las dos pulsaciones
+# se anularían. Nadie más usa el 1 —el 0 es la celda, el 2 las mallas del UR10e y el 3
+# sus colisiones— y NO puede pasar del 2: los renderers fuera de pantalla (fotos y
+# cámaras de profundidad) usan la `MjvOption` por defecto, que sólo pinta los grupos
+# 0-2, y un bulto en el 3 desaparecería de la percepción sin dar error.
+PACKAGE_GROUP = 1
+
 
 @dataclass(frozen=True)
 class Box:
@@ -431,7 +441,7 @@ def _package_xml(box: Box, held: HeldPackage | None, simplified: bool) -> str:
         f'<geom name="{box.geom}" type="box" '
         f'size="{width / 2:.6f} {depth / 2:.6f} {height / 2:.6f}" density="0" '
         f'friction="{friction}" contype="{PACKAGE_CONTACT}" conaffinity="{PACKAGE_CONTACT}" '
-        f'rgba="{rgba}"/>'
+        f'rgba="{rgba}" group="{PACKAGE_GROUP}"/>'
     )
     trim = ""
     if not simplified:
@@ -441,10 +451,10 @@ def _package_xml(box: Box, held: HeldPackage | None, simplified: bool) -> str:
         trim = f"""
       <geom type="box" pos="0 0 {height / 2 + 0.001:.6f}"
             size="{tape / 2:.6f} {depth / 2:.6f} 0.0015" rgba="0.73 0.61 0.40 1"
-            contype="0" conaffinity="0"/>
+            contype="0" conaffinity="0" group="{PACKAGE_GROUP}"/>
       <geom type="box" pos="{width * 0.18:.6f} {-depth / 2 - 0.001:.6f} {height * 0.08:.6f}"
             size="{label_w / 2:.6f} 0.0015 {label_h / 2:.6f}" rgba="0.94 0.95 0.91 1"
-            contype="0" conaffinity="0"/>"""
+            contype="0" conaffinity="0" group="{PACKAGE_GROUP}"/>"""
 
     if held is not None and held.index == box.index:
         position = " ".join(f"{value:.6f}" for value in held.position)

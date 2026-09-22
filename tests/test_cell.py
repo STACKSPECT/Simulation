@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import os
 import sys
@@ -18,7 +19,13 @@ from src.cell import tcp_frame  # noqa: E402
 from src.cell.arm import ArmController  # noqa: E402
 from src.cell.conveyor import Belt, make_supply  # noqa: E402
 from src.cell.render import VIEWS  # noqa: E402
-from src.cell.scene import build_catalogue, build_scene, levels, load_configs  # noqa: E402
+from src.cell.scene import (  # noqa: E402
+    PACKAGE_GROUP,
+    build_catalogue,
+    build_scene,
+    levels,
+    load_configs,
+)
 from src.cell.stability import run_stability_test  # noqa: E402
 from src.cell.truck import TruckSupply  # noqa: E402
 from src.episode import run_episode  # noqa: E402
@@ -95,6 +102,36 @@ def test_auxiliary_table_exists_in_all_levels() -> None:
             )
             assert auxiliary >= 0, f"nivel {level_id}: falta la mesa auxiliar"
             assert (source_table >= 0) is (scene.level.source == "table")
+        finally:
+            scene.close()
+
+
+def test_the_1_key_hides_the_packages_and_nothing_else() -> None:
+    """El grupo de geoms de los bultos es el atajo del visor que los esconde.
+
+    Tiene que quedarse con los bultos enteros —cartón, cinta y etiqueta— y con nada más:
+    si otro geom cae en él, el `1` lo esconde también. Y lo que las cámaras ven sale de
+    la `MjvOption` por defecto: si el grupo deja de estar encendido ahí, las fotos y el
+    mapa de alturas medido se quedan sin bultos sin dar error.
+    """
+    import mujoco
+
+    assert mujoco.MjvOption().geomgroup[PACKAGE_GROUP] == 1
+    # El 34 es el de la nave; sin gráficos simples es cuando monta su atrezo.
+    for level_id, simplified in itertools.product((11, 21, 31, 34), (True, False)):
+        scene = build_scene(level_id=level_id, seed=3, simplified=simplified)
+        try:
+            model = scene.model
+            packages = {box.body for box in scene.boxes}
+            for geom in range(model.ngeom):
+                body = mujoco.mj_id2name(
+                    model, mujoco.mjtObj.mjOBJ_BODY, model.geom_bodyid[geom]
+                )
+                in_group = int(model.geom_group[geom]) == PACKAGE_GROUP
+                assert in_group is (body in packages), (
+                    f"nivel {level_id}: el geom {geom} de {body} en el grupo "
+                    f"{model.geom_group[geom]}"
+                )
         finally:
             scene.close()
 

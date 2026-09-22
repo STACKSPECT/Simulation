@@ -22,7 +22,7 @@ from theker_telemetry import EpisodeResult, RunLog  # noqa: E402
 
 from src import measure  # noqa: E402
 from src.cell.render import draw_heightmap  # noqa: E402
-from src.cell.scene import build_scene, levels, load_configs  # noqa: E402
+from src.cell.scene import PACKAGE_GROUP, build_scene, levels, load_configs  # noqa: E402
 from src.cell.stability import run_stability_test  # noqa: E402
 from src.episode import run_episode  # noqa: E402
 from src.planner.heuristic import ScorePlanner  # noqa: E402
@@ -161,6 +161,8 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
     def on_key(keycode: int) -> None:
         # `m` enciende y apaga la rejilla del mapa de alturas. GLFW manda la letra en
         # mayúscula, así que se comparan las dos y no dependemos de si hay bloq mayús.
+        # El `1`, que esconde los bultos, NO se atiende aquí: lo hace el visor solo, ver
+        # `scene.PACKAGE_GROUP`.
         if keycode not in (ord("m"), ord("M")):
             return
         scene.show_heightmap = not getattr(scene, "show_heightmap", False)
@@ -168,6 +170,7 @@ def _run(scene, detector, gauge, planner, seed: int, speed: float, sink, args):
         if last is not None:
             draw_heightmap(scene, last)
 
+    _log(args, f"visor: m mapa de alturas · {PACKAGE_GROUP} esconde/enseña los bultos")
     with mujoco.viewer.launch_passive(
         scene.model, scene.data, key_callback=on_key
     ) as viewer:

@@ -343,7 +343,7 @@ real components against oracle stubs, so only it can compute a run's `oracle` fl
 | `--beam-planner` | **The beam search** — the planner the [results](#results) were measured with |
 | `--naive-planner` | The grid baseline. Marks the run `oracle = true` |
 | `--speed F` | `0` = fast-forward; any positive value interpolates the motion |
-| `--viewer` | Open the 3D window (one episode only) |
+| `--viewer` | Open the 3D window (one episode only). `m` shows the height map, `1` hides or shows the boxes |
 | `--no-telemetry` | Disk only. **Otherwise it uploads by default** |
 | `--no-oracle-gauge` | Weigh on the wrist for real |
 | `--no-oracle-heightmap` | Build the map from the three cameras |
@@ -472,7 +472,7 @@ expect them to have moved up.
 | 0 | `python -m placing` | The heuristic alone; first check is the import boundary | `15 checks passed` |
 | 1 | `python tests/test_pallet.py` | Row keys are columns, `seq` never repeats, vocabularies hold, the adapter's silent unit translations and training traces | `30 comprobaciones pasadas` |
 | 2 | `python -m src.measure` | CoG with out-of-tolerance boxes, margin against the support polygon | `ok measure.demo` |
-| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `18 comprobaciones físicas pasadas` |
+| 3 | `python tests/test_cell.py` | Starts MuJoCo: three sources, cameras, belt, truck order, IK envelope, wrist gauge, robot-free training | `19 comprobaciones físicas pasadas` |
 | 4 | `python scripts/palletize.py -n 1 --no-telemetry --level 21` | A whole episode to disk | `4/4 · ÉXITO` |
 | 5 | `cd tools && uv run --extra dev pytest` | The demonstrator survived being moved | `208 passed` in 41 s |
 
